@@ -1,0 +1,12 @@
+{
+  "name": "beaverbusters-checker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome + Firefox extension for the BeaverBusters hub API",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:chrome": "node build.mjs chrome",
+    "build:firefox": "node build.mjs firefox"
+  }
+}
