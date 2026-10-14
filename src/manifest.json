@@ -1,0 +1,62 @@
+{
+  "manifest_version": 3,
+  "name": "BeaverBusters",
+  "short_name": "BeaverBusters",
+  "version": "1.0.0",
+  "description": "Live crypto scam protection: checks websites and wallet addresses against the BeaverBusters scam database and lets you report scams.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "BeaverBusters",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "service_worker": "background.js",
+    "scripts": [
+      "lib/compat.js",
+      "lib/config.js",
+      "lib/storage.js",
+      "lib/wallets.js",
+      "lib/openapi.js",
+      "lib/verdict.js",
+      "lib/api.js",
+      "background.js"
+    ]
+  },
+  "permissions": ["storage", "tabs", "webNavigation", "contextMenus", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["lib/compat.js", "lib/wallets.js", "content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "beaverbusters@beaverbusters-extension",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["browsingActivity"],
+        "optional": ["websiteContent"]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  }
+}

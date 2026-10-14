@@ -1,0 +1,14 @@
+/* Highlight for flagged wallet addresses found on a page. */
+mark.bb-wallet-flag {
+  background: rgba(197, 34, 31, 0.18) !important;
+  color: inherit !important;
+  outline: 2px solid #c5221f !important;
+  outline-offset: 1px !important;
+  border-radius: 2px !important;
+  padding: 0 1px !important;
+  cursor: help !important;
+}
+mark.bb-wallet-flag.bb-level-suspicious {
+  background: rgba(227, 116, 0, 0.18) !important;
+  outline-color: #e37400 !important;
+}

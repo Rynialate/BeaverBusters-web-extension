@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BeaverBusters</title>
+  <link rel="stylesheet" href="../shared/ui.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="top">
+    <img src="../icons/icon-32.png" alt="" width="22" height="22">
+    <h1>BeaverBusters</h1>
+    <button type="button" class="icon-btn" id="openOptions" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.5 7.5 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.5 7.5 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.5 7.5 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7.5 7.5 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
+    </button>
+  </header>
+
+  <div id="loading" class="pad"><div class="row muted"><span class="spinner"></span> Loading…</div></div>
+
+  <!-- API key prompt: shown until a working key is saved -->
+  <section id="gate" class="pad" hidden>
+    <h2>Connect your API key</h2>
+    <p class="muted" id="gateText">BeaverBusters needs an API key for the scam database before it can check websites and wallets. Nothing is checked until a key is saved.</p>
+    <form class="key-form" autocomplete="off">
+      <div class="field">
+        <label for="gateKey">API key</label>
+        <div class="row">
+          <input class="key-input grow" id="gateKey" type="password" spellcheck="false" autocapitalize="off" placeholder="Paste your key" required>
+          <button type="button" class="key-toggle" aria-pressed="false">Show</button>
+        </div>
+      </div>
+      <div class="row">
+        <button type="submit" class="primary key-save">Save and verify</button>
+        <button type="button" class="key-skip" hidden>Save without verifying</button>
+      </div>
+      <div class="key-msg" aria-live="polite"></div>
+      <p class="hint"><a class="key-docs" target="_blank" rel="noopener">API documentation</a></p>
+    </form>
+  </section>
+
+  <main id="app" hidden>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="site" aria-selected="true">Site</button>
+      <button role="tab" data-tab="wallets">Wallets <span class="count" id="walletCount" hidden></span></button>
+      <button role="tab" data-tab="lookup">Lookup</button>
+      <button role="tab" data-tab="report">Report</button>
+      <button role="tab" data-tab="history">History</button>
+    </nav>
+
+    <section class="pane pad" data-pane="site" role="tabpanel">
+      <div id="siteVerdict"></div>
+      <div class="row row-wrap actions" id="siteActions" hidden>
+        <button type="button" id="siteRecheck">Recheck</button>
+        <button type="button" id="siteReport">Report site</button>
+        <button type="button" id="siteTrust" title="Never check this domain">Trust</button>
+      </div>
+      <div class="card" id="siteSubmittedCard" hidden>
+        <div class="row">
+          <div class="grow"><strong>Already reported?</strong><div class="hint">Look up existing submissions for this domain.</div></div>
+          <button type="button" class="small" id="siteSubmittedBtn">Check</button>
+        </div>
+        <div id="siteSubmitted"></div>
+      </div>
+    </section>
+
+    <section class="pane pad" data-pane="wallets" role="tabpanel" hidden>
+      <form id="walletForm" class="row">
+        <input id="walletInput" class="grow mono-input" placeholder="Wallet address to check" spellcheck="false" autocomplete="off" aria-label="Wallet address">
+        <button type="submit" class="primary">Check</button>
+      </form>
+      <div id="walletResult"></div>
+      <div class="section-head">
+        <h3>Found on this page</h3>
+        <button type="button" class="small" id="rescan">Rescan</button>
+      </div>
+      <div id="walletList"></div>
+    </section>
+
+    <section class="pane pad" data-pane="lookup" role="tabpanel" hidden>
+      <form id="lookupForm" class="row">
+        <input id="lookupInput" class="grow" placeholder="Domain, URL, wallet or submission ID" spellcheck="false" autocomplete="off" aria-label="Lookup query">
+        <button type="submit" class="primary">Look up</button>
+      </form>
+      <div class="hint" id="lookupHint">Checks the scam database and existing submissions.</div>
+      <div id="lookupResult" class="stack"></div>
+    </section>
+
+    <section class="pane pad" data-pane="report" role="tabpanel" hidden>
+      <div class="segmented" role="radiogroup" aria-label="What are you reporting?">
+        <label><input type="radio" name="kind" value="domain" checked> Website</label>
+        <label><input type="radio" name="kind" value="wallet"> Wallet</label>
+      </div>
+      <div id="reportDuplicate"></div>
+      <form id="reportForm" novalidate></form>
+      <div id="reportResult"></div>
+    </section>
+
+    <section class="pane pad" data-pane="history" role="tabpanel" hidden>
+      <div id="historyServer"></div>
+      <h3 class="sub">Submitted from this browser</h3>
+      <div id="historyLocal"></div>
+    </section>
+  </main>
+
+  <footer class="foot" id="foot" hidden></footer>
+
+  <script src="../lib/compat.js"></script>
+  <script src="../lib/wallets.js"></script>
+  <script src="../shared/render.js"></script>
+  <script src="../shared/keyform.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

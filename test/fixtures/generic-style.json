@@ -1,0 +1,53 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Test fixture: generic indicator API",
+    "description": "Synthetic spec with catch-all endpoints, used only by the unit tests.",
+    "version": "2.0.0"
+  },
+  "servers": [{ "url": "/v2" }],
+  "security": [{ "bearer": [] }],
+  "paths": {
+    "/lookup": {
+      "get": {
+        "summary": "Look up an indicator",
+        "parameters": [{ "name": "q", "in": "query", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/reports": {
+      "get": {
+        "summary": "List my reports",
+        "parameters": [{ "name": "page", "in": "query", "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Create a report",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Report" } } } },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/reports/{id}": {
+      "get": {
+        "summary": "Get report status",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": { "bearer": { "type": "http", "scheme": "bearer" } },
+    "schemas": {
+      "Report": {
+        "type": "object",
+        "required": ["type", "target"],
+        "properties": {
+          "type": { "type": "string", "enum": ["website", "wallet"] },
+          "target": { "type": "string" },
+          "chain": { "type": "string" },
+          "reason": { "type": "string", "maxLength": 2000 }
+        }
+      }
+    }
+  }
+}

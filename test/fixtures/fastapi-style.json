@@ -1,0 +1,173 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Test fixture: FastAPI-style scam database",
+    "description": "Synthetic spec used only by the unit and end-to-end tests. It is not the real API.",
+    "version": "0.0.1"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": { "summary": "Health", "operationId": "health_api_v1_health_get", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "Current API key info",
+        "operationId": "me_api_v1_auth_me_get",
+        "security": [{ "APIKeyHeader": [] }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/domains/check": {
+      "get": {
+        "tags": ["domains"],
+        "summary": "Check Domain",
+        "operationId": "check_domain_api_v1_domains_check_get",
+        "security": [{ "APIKeyHeader": [] }],
+        "parameters": [{ "name": "domain", "in": "query", "required": true, "schema": { "type": "string", "title": "Domain" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/domains": {
+      "get": {
+        "tags": ["domains"],
+        "summary": "List Domains",
+        "operationId": "list_domains_api_v1_domains_get",
+        "security": [{ "APIKeyHeader": [] }],
+        "parameters": [
+          { "name": "skip", "in": "query", "required": false, "schema": { "type": "integer", "default": 0 } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 100 } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "tags": ["domains"],
+        "summary": "Submit Domain",
+        "operationId": "submit_domain_api_v1_domains_post",
+        "security": [{ "APIKeyHeader": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DomainSubmission" } } } },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/api/v1/wallets/{address}": {
+      "get": {
+        "tags": ["wallets"],
+        "summary": "Get Wallet",
+        "operationId": "get_wallet_api_v1_wallets__address__get",
+        "security": [{ "APIKeyHeader": [] }],
+        "parameters": [
+          { "name": "address", "in": "path", "required": true, "schema": { "type": "string", "title": "Address" } },
+          { "name": "chain", "in": "query", "required": false, "schema": { "anyOf": [{ "$ref": "#/components/schemas/Chain" }, { "type": "null" }], "title": "Chain" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/wallets/batch-check": {
+      "post": {
+        "tags": ["wallets"],
+        "summary": "Batch Check Wallets",
+        "operationId": "batch_check_api_v1_wallets_batch_check_post",
+        "security": [{ "APIKeyHeader": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["addresses"], "properties": { "addresses": { "type": "array", "items": { "type": "string" } } } } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/wallets/extract": {
+      "post": {
+        "tags": ["wallets"],
+        "summary": "Extract wallet addresses from page text",
+        "operationId": "extract_wallets_api_v1_wallets_extract_post",
+        "security": [{ "APIKeyHeader": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string" }, "url": { "anyOf": [{ "type": "string" }, { "type": "null" }] } } } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/wallets/report": {
+      "post": {
+        "tags": ["wallets"],
+        "summary": "Report Wallet",
+        "operationId": "report_wallet_api_v1_wallets_report_post",
+        "security": [{ "APIKeyHeader": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WalletSubmission" } } } },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/api/v1/submissions/{submission_id}": {
+      "get": {
+        "tags": ["submissions"],
+        "summary": "Get Submission Status",
+        "operationId": "get_submission_api_v1_submissions__submission_id__get",
+        "security": [{ "APIKeyHeader": [] }],
+        "parameters": [{ "name": "submission_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/submissions/search": {
+      "get": {
+        "tags": ["submissions"],
+        "summary": "Search Submissions",
+        "operationId": "search_submissions_api_v1_submissions_search_get",
+        "security": [{ "APIKeyHeader": [] }],
+        "parameters": [{ "name": "value", "in": "query", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/submissions/me": {
+      "get": {
+        "tags": ["submissions"],
+        "summary": "My Submissions",
+        "operationId": "my_submissions_api_v1_submissions_me_get",
+        "security": [{ "APIKeyHeader": [] }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/admin/domains/{domain_id}": {
+      "delete": {
+        "tags": ["admin"],
+        "summary": "Delete Domain",
+        "operationId": "delete_domain_api_v1_admin_domains__domain_id__delete",
+        "security": [{ "APIKeyHeader": [] }],
+        "parameters": [{ "name": "domain_id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "204": { "description": "Deleted" } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Chain": { "type": "string", "enum": ["ethereum", "bitcoin", "solana", "tron", "bsc"], "title": "Chain" },
+      "ScamCategory": { "type": "string", "enum": ["phishing", "fake_exchange", "investment_fraud", "drainer", "impersonation", "other"], "title": "ScamCategory" },
+      "DomainSubmission": {
+        "type": "object",
+        "required": ["domain", "category"],
+        "properties": {
+          "domain": { "type": "string", "title": "Domain" },
+          "url": { "anyOf": [{ "type": "string", "format": "uri" }, { "type": "null" }], "title": "Url" },
+          "category": { "$ref": "#/components/schemas/ScamCategory" },
+          "description": { "anyOf": [{ "type": "string" }, { "type": "null" }], "title": "Description" },
+          "evidence_urls": { "type": "array", "items": { "type": "string" }, "title": "Evidence Urls" },
+          "id": { "type": "string", "readOnly": true }
+        }
+      },
+      "WalletSubmission": {
+        "type": "object",
+        "required": ["address", "chain", "category"],
+        "properties": {
+          "address": { "type": "string", "title": "Address" },
+          "chain": { "$ref": "#/components/schemas/Chain" },
+          "category": { "$ref": "#/components/schemas/ScamCategory" },
+          "source_url": { "anyOf": [{ "type": "string" }, { "type": "null" }], "title": "Source Url" },
+          "notes": { "anyOf": [{ "type": "string" }, { "type": "null" }], "title": "Notes" }
+        }
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": { "type": "apiKey", "in": "header", "name": "X-API-Key" }
+    }
+  }
+}

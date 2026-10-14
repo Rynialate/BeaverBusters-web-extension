@@ -1,0 +1,16 @@
+{
+  "name": "beaverbusters-web-extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome and Firefox extension for live crypto scam domain checks, wallet checks and reporting via the BeaverBusters scam database API.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:chrome": "node scripts/build.mjs chrome",
+    "build:firefox": "node scripts/build.mjs firefox",
+    "test": "node --test",
+    "lint:firefox": "npx --yes web-ext@8 lint --source-dir dist/firefox"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scam site blocked</title>
+  <link rel="icon" href="../icons/icon-32.png">
+  <link rel="stylesheet" href="../shared/ui.css">
+  <link rel="stylesheet" href="warning.css">
+</head>
+<body>
+  <main class="wrap">
+    <div class="shield" aria-hidden="true">
+      <svg viewBox="0 0 64 64" width="64" height="64"><path d="M32 4 8 13v17c0 15 10 26 24 30 14-4 24-15 24-30V13L32 4z" fill="currentColor"/><path d="M29 18h6v18h-6zM29 41h6v6h-6z" fill="#fff"/></svg>
+    </div>
+    <p class="brand">BeaverBusters blocked this page</p>
+    <h1>This site is a reported crypto scam</h1>
+    <p class="lead">
+      <span class="mono" id="host"></span> is listed in the BeaverBusters scam database.
+      Scam sites steal seed phrases, drain wallets through malicious approvals, and take payments for fake investments.
+    </p>
+
+    <section class="verdict scam" id="verdict" hidden>
+      <div class="headline" id="label"></div>
+      <ul id="reasons"></ul>
+      <dl class="kv" id="fields"></dl>
+    </section>
+
+    <div class="actions">
+      <button class="primary" id="leave" type="button">Get me out of here</button>
+    </div>
+
+    <details class="proceed">
+      <summary>I understand the risk</summary>
+      <p class="muted small-text">Continue only if you are sure this is a mistake. Never enter a seed phrase or private key on a website.</p>
+      <button class="danger" id="proceed" type="button">Continue to <span id="host2"></span> (unsafe)</button>
+    </details>
+  </main>
+  <script src="../lib/compat.js"></script>
+  <script src="warning.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+body { background: var(--scam-bg); min-height: 100vh; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 56px 16px 40px; }
+.shield { color: var(--scam); margin-bottom: 12px; }
+.brand { text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; font-weight: 700; color: var(--scam); margin: 0 0 6px; }
+h1 { font-size: 28px; margin-bottom: 12px; text-wrap: balance; }
+.lead { font-size: 15px; color: var(--fg); margin: 0 0 20px; }
+.lead .mono { font-size: 15px; font-weight: 700; }
+.verdict { background: var(--bg) !important; margin-bottom: 20px; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 28px; }
+.actions .primary { padding: 10px 18px; font-size: 15px; }
+.proceed summary { cursor: pointer; color: var(--fg-muted); font-size: 13px; }
+.proceed button { margin-top: 4px; white-space: normal; text-align: left; }
+@media (max-width: 480px) { .wrap { padding-top: 32px; } h1 { font-size: 23px; } }

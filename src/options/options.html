@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BeaverBusters Settings</title>
+  <link rel="icon" href="../icons/icon-32.png">
+  <link rel="stylesheet" href="../shared/ui.css">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <header class="top">
+    <img src="../icons/icon-48.png" alt="" width="32" height="32">
+    <div>
+      <h1>BeaverBusters</h1>
+      <p class="muted">Crypto scam protection: live domain checks, wallet checks and reporting</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- API key: required before anything else works -->
+    <section class="card" id="keySection" aria-labelledby="keyTitle">
+      <div class="notice warn welcome" id="welcome" hidden>
+        <strong>Welcome to BeaverBusters.</strong> Enter your API key to turn on protection. The extension does nothing until a key is saved.
+      </div>
+      <div class="section-title">
+        <h2 id="keyTitle">API key</h2>
+        <span id="keyState"></span>
+      </div>
+      <p class="muted small-text">Used to authenticate every request to the scam database. It is stored only in this browser's extension storage and sent only to the API.</p>
+      <form class="key-form" autocomplete="off">
+        <div class="field">
+          <label for="keyInput" id="keyLabel">API key</label>
+          <div class="row">
+            <input class="key-input grow" id="keyInput" type="password" spellcheck="false" autocapitalize="off" placeholder="Paste your key">
+            <button type="button" class="key-toggle" aria-pressed="false">Show</button>
+          </div>
+        </div>
+        <div class="row row-wrap">
+          <button type="submit" class="primary key-save">Save and verify</button>
+          <button type="button" class="key-skip" hidden>Save without verifying</button>
+          <button type="button" class="danger" id="removeKey" hidden>Remove key</button>
+          <a class="key-docs small-text" target="_blank" rel="noopener">API documentation</a>
+        </div>
+        <div class="key-msg" aria-live="polite"></div>
+      </form>
+    </section>
+
+    <div id="settingsArea">
+      <section class="card" aria-labelledby="protTitle">
+        <h2 id="protTitle">Protection</h2>
+        <div class="toggles">
+          <label class="toggle"><input type="checkbox" data-setting="liveDomainCheck"><span><strong>Live domain checking</strong><span class="hint">Check every website you open against the scam database.</span></span></label>
+          <label class="toggle"><input type="checkbox" data-setting="blockScamSites"><span><strong>Block known scam sites</strong><span class="hint">Show a warning page before a known scam site loads.</span></span></label>
+          <label class="toggle"><input type="checkbox" data-setting="warnSuspicious"><span><strong>Warn on suspicious sites</strong><span class="hint">Show a banner on sites that are reported or suspicious.</span></span></label>
+          <label class="toggle"><input type="checkbox" data-setting="sendFullUrl"><span><strong>Send full page URLs</strong><span class="hint">Off: only the domain name is sent. On: the full URL (path and query) is sent, which helps the server spot phishing paths.</span></span></label>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="walletTitle">
+        <h2 id="walletTitle">Wallet finding</h2>
+        <div class="toggles">
+          <label class="toggle"><input type="checkbox" data-setting="autoWalletScan"><span><strong>Find wallet addresses automatically</strong><span class="hint">Scan pages for crypto addresses and check them against the database.</span></span></label>
+          <label class="toggle"><input type="checkbox" data-setting="highlightWallets"><span><strong>Highlight flagged addresses</strong><span class="hint">Outline scam wallet addresses on the page.</span></span></label>
+          <label class="toggle"><input type="checkbox" data-setting="serverWalletExtraction"><span><strong>Server-side extraction</strong><span class="hint" id="extractHint">Send page text to the API to find addresses (more accurate, but the page's text leaves your browser). Only used if the API has an extraction endpoint.</span></span></label>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="trustTitle">
+        <h2 id="trustTitle">Trusted domains</h2>
+        <p class="muted small-text">These domains and their subdomains are never sent to the API. One per line.</p>
+        <textarea id="trusted" rows="4" spellcheck="false" placeholder="example.com"></textarea>
+        <div class="row" style="margin-top:8px">
+          <label class="inline small-text">Cache results for <input type="number" id="cacheMinutes" min="1" max="1440" style="width:80px"> minutes</label>
+          <span class="grow"></span>
+          <button type="button" id="saveTrusted">Save</button>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="apiTitle">
+        <h2 id="apiTitle">API connection</h2>
+        <p class="muted small-text">The extension reads the API's OpenAPI description and maps its features to the endpoints it finds there, so new server features are picked up without an extension update.</p>
+        <div class="field">
+          <label for="baseUrl">API base URL</label>
+          <input id="baseUrl" type="url" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="specUrl">OpenAPI description URL</label>
+          <input id="specUrl" type="url" spellcheck="false" placeholder="(base URL)/openapi.json">
+        </div>
+        <div class="row row-wrap">
+          <button type="button" class="primary" id="saveApi">Save</button>
+          <button type="button" id="reloadSpec">Reload API description</button>
+          <label class="btn" for="importSpec">Import from file…</label>
+          <input type="file" id="importSpec" accept=".json,application/json" hidden>
+          <button type="button" id="clearImport" hidden>Stop using imported file</button>
+        </div>
+        <div id="specStatus" class="stack" style="margin-top:12px"></div>
+      </section>
+
+      <section class="card" aria-labelledby="mapTitle">
+        <h2 id="mapTitle">Endpoint mapping</h2>
+        <p class="muted small-text">Which API endpoint each feature uses. "Automatic" picks the best match from the API description. Override if a feature uses the wrong endpoint.</p>
+        <div id="mapping"></div>
+      </section>
+
+      <section class="card" aria-labelledby="dataTitle">
+        <h2 id="dataTitle">Data</h2>
+        <div class="row row-wrap">
+          <button type="button" id="clearCache">Clear cached results</button>
+          <span id="dataMsg" class="muted small-text"></span>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="../lib/compat.js"></script>
+  <script src="../shared/render.js"></script>
+  <script src="../shared/keyform.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
