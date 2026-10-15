@@ -12,8 +12,10 @@ checked against the hub's `GET /me` before it is saved.
 |---|---|---|
 | Live domain check | Every http(s) site you visit is checked and the toolbar badge shows `SCAM`, `SUS`, `OK`, `OOS` or the count of wallets on the page. If the hub doesn't know a subdomain, its parent domain is checked too. | `GET /check` |
 | Submitted check | Shows whether the site has been submitted, who submitted it, its points and any claim. | `GET /check` |
-| Wallet finding | Finds candidate addresses in page text, input values, copy-button attributes, `bitcoin:`/`tron:` style links and QR image URLs, and addresses the user copies. Rescans when the page changes, so deposit addresses revealed later are caught. Base58check addresses (BTC/LTC/DOGE/DASH/TRX) are verified locally; the hub re-checks every address shape on write. | — |
+| Wallet finding | Finds candidate addresses in page text, input values, copy-button attributes, `bitcoin:`/`tron:` style links and QR image URLs, and addresses the user copies. Rescans when the page changes, so deposit addresses revealed later are caught. Every candidate must pass full validation (below) before it is shown or submitted. | — |
+| Wallet validation | `src/lib/wallets.js`, a port of the ScamHunt CTF validator ([benpinpop/urlscan-dashboard `wallet_validation/`](https://github.com/benpinpop/urlscan-dashboard/tree/main/wallet_validation)): Base58Check with version bytes (BTC, LTC, DOGE, DASH, TRX), Bech32/Bech32m SegWit and Taproot, CashAddr (BCH), Cardano Shelley headers, XRP Ledger Base58Check, EIP-55 for mixed-case 0x addresses. Additions for chains the hub accepts: TON (CRC16) and Solana (32-byte key; Solana has no checksum). Extra addresses typed into the Submit form are checked as you type, and the background refuses to submit any address that fails. | — |
 | Wallet check | Each address is looked up: new, on N scam sites, already submitted, excluded. | `GET /wallets/{address}` |
+| On-chain volume | Lifetime received and sent, balance, transaction count and last activity for each wallet, with a USD estimate at today's prices. For Tron it also sums USDT-TRC20 transfers in and out; for 0x addresses it checks Ethereum, BNB Chain, Polygon, Arbitrum, Optimism and Base and shows the networks with activity. Shown in the popup and the widget, and can be included in a submission as a `wallet_volume` check. | Public explorers (see Privacy) |
 | Scope classification | Sends the page HTML to the hub's own classifier: in scope / out of scope / inconclusive. An in-scope result pre-fills the submit form. | `POST /scope` |
 | Submission | One bundle with verdict, reasons, selected wallets, comment, gzip'd HTML snapshot, the scope result and an optional "I reported it" submission record. | `POST /ingest` |
 | Claim | Claim or release a domain for 24 h. | `POST/DELETE /domains/{d}/claim` |
@@ -53,6 +55,7 @@ Then click the toolbar icon (badge `KEY`), paste your hub API key, and press **V
   Turn it off to check only on demand. Sites in the ignored list get no wallet scan and no widget.
   Explorers and the hub itself are ignored by default.
 - Page HTML leaves the browser only when you click **Classify page**, submit with **Attach page HTML** ticked, or turn on auto-classify.
+- **On-chain volume** sends wallet addresses (never your key or the page) to public explorers: mempool.space, litecoinspace.org, blockcypher.com, blockchair.com, ethplorer.io, binplorer.com, blockscout.com, trongrid.io, xrpscan.com, xrplcluster.com, the Solana public RPC, koios.rest, tonapi.io, toncenter.com, and coingecko.com for prices. By default this happens only when you open the popup; **Settings → On-chain volume** can make it automatic or turn it off. Results are cached for 30 minutes.
 - Lookups are cached for 10–30 minutes, and the extension backs off when the key's per-minute limit gets low.
 
 ## Layout
@@ -62,6 +65,8 @@ src/manifest.json      shared manifest (build.mjs adds the per-browser backgroun
 src/background.js      API calls, caching, badge, auto-submit, submission bundles
 src/lib/api.js         hub client (rate-limit aware)
 src/lib/settings.js    defaults, reason codes, storage helpers
+src/lib/wallets.js     chain detection + checksum validation (shared by page, background, popup)
+src/lib/volume.js      on-chain volume from public explorers
 src/content.js         wallet finder + corner widget (shadow DOM)
 src/popup/             key prompt, status, submit form, lookup, settings
 ```

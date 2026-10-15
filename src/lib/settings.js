@@ -8,6 +8,7 @@ export const DEFAULT_SETTINGS = {
   widget: 'alerts',         // on-page corner widget: 'alerts' | 'always' | 'never'
   autoSubmitWallets: false, // add newly found wallets to domains the hub already flags as scam/suspected
   autoScope: false,         // send page HTML to the hub's scope classifier when an unknown site shows wallets
+  volume: 'popup',          // on-chain volume from public explorers: 'popup' (when the popup opens) | 'auto' | 'off'
   ignore: [
     'sdb.netherportal3.com',
     'etherscan.io', 'bscscan.com', 'polygonscan.com', 'arbiscan.io', 'basescan.org',

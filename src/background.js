@@ -3,11 +3,19 @@
 
 import { hub, limits, ApiError, CLIENT_SOURCE } from './lib/api.js';
 import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES } from './lib/settings.js';
+import { walletVolume, usdPrices, addUsd, SUPPORTED as VOLUME_CHAINS } from './lib/volume.js';
+import './lib/wallets.js';
+
+const W = globalThis.BBWallets;
 
 const DOMAIN_TTL = 10 * 60 * 1000;
 const WALLET_TTL = 30 * 60 * 1000;
 const MAX_WALLET_LOOKUPS = 40;   // per page, to stay well inside the per-minute key limit
 const MAX_HTML_CHARS = 2_000_000;
+const VOLUME_TTL = 30 * 60 * 1000;
+const VOLUME_ERROR_TTL = 2 * 60 * 1000; // retry a failed explorer lookup soon
+const PRICE_TTL = 10 * 60 * 1000;
+const MAX_VOLUME_WALLETS = 20;   // per page
 
 const session = ext.storage.session;
 const EXT_ORIGIN = ext.runtime.getURL('');
@@ -165,6 +173,73 @@ async function checkWallets(apiKey, host, wallets) {
   return out;
 }
 
+// ---------- wallet validation (lib/wallets.js) ----------
+
+// Checksum-verified, or EVM without checksum casing; Solana keys have no checksum at all.
+const confidenceOf = c => (c.checksum || W.EVM_CHAINS.includes(c.chain) ? 'high' : 'low');
+
+// A page- or user-supplied string -> validated wallet record, or null if it is not a real address.
+function describeWallet(raw, where) {
+  const c = W.checkDetected(String(raw || '').trim());
+  if (!c) return null;
+  return { address: W.hubAddress(c), chain: c.chain, format: c.format, checksum: c.checksum, confidence: confidenceOf(c), where: String(where || 'manual').slice(0, 20) };
+}
+
+// Why a string was refused, in the validator's own words.
+function whyInvalid(raw) {
+  const s = String(raw || '').trim();
+  const det = W.detectChain(s);
+  if (!det.chain) return `${s.slice(0, 60)}: not a recognised wallet address.`;
+  return W.validateWallet(det.chain, s).errors[0] || `${s.slice(0, 60)}: invalid.`;
+}
+
+// ---------- on-chain volume (lib/volume.js) ----------
+
+async function prices(assets) {
+  const v = (await session.get('prices')).prices;
+  const have = v && Date.now() - v.at < PRICE_TTL ? v.data : {};
+  const missing = [...new Set(assets)].filter(a => !(a in have));
+  if (!missing.length) return have;
+  const got = await usdPrices([...new Set([...Object.keys(have), ...missing])]);
+  const data = { ...have, ...got };
+  await session.set({ prices: { at: Date.now(), data } });
+  return data;
+}
+
+async function volumeFor(w) {
+  const ck = 'vol:' + w.address;
+  const v = (await session.get(ck))[ck];
+  if (v) {
+    const failed = !v.data.networks.length && v.data.errors.length;
+    if (Date.now() - v.at < (failed ? VOLUME_ERROR_TTL : VOLUME_TTL)) return v.data;
+  }
+  return once(ck, async () => {
+    const vol = await walletVolume(w.chain, w.address);
+    try { addUsd(vol, await prices(vol.networks.map(n => n.asset))); } catch { vol.usdReceived = null; } // the USD estimate is optional
+    await cacheSet(ck, vol);
+    return vol;
+  });
+}
+
+// Fetch on-chain figures for a tab's wallets, store them on the tab, and push them to its widget.
+async function volumesForTab(tabId) {
+  const state = await getTab(tabId);
+  const todo = (state?.wallets || []).filter(w => VOLUME_CHAINS.has(w.chain)).slice(0, MAX_VOLUME_WALLETS);
+  const vols = {};
+  const queue = [...todo];
+  await Promise.all([0, 1, 2].map(async () => {
+    for (let w = queue.shift(); w; w = queue.shift()) vols[w.address] = await volumeFor(w);
+  }));
+  // Re-read: the page may have reported more wallets meanwhile.
+  const now = await getTab(tabId);
+  if (now) {
+    now.wallets = (now.wallets || []).map(w => (vols[w.address] ? { ...w, volume: vols[w.address] } : w));
+    await setTab(tabId, now);
+  }
+  ext.tabs.sendMessage(tabId, { type: 'page:volumes', volumes: vols }).catch(() => null);
+  return now?.wallets || [];
+}
+
 // ---------- badge ----------
 
 const BADGE = {
@@ -311,13 +386,45 @@ async function gzipBase64(text) {
   return btoa(bin);
 }
 
+// On-chain figures for the submitted wallets, as one hub "check" on the domain.
+function volumeReport(vols, now) {
+  if (!vols.length) return null;
+  const round = v => (v === null || v === undefined ? null : Math.round(v * 1e8) / 1e8);
+  const wallets = vols.map(v => ({
+    address: v.address,
+    chain: v.chain,
+    checked_networks: v.checked,
+    usd_received: v.usdReceived === null || v.usdReceived === undefined ? null : Math.round(v.usdReceived),
+    networks: v.networks.map(n => ({
+      network: n.network, asset: n.asset,
+      received: round(n.received), sent: round(n.sent), balance: round(n.balance),
+      tx_count: n.txCount, first_seen: n.firstSeen, last_activity: n.lastActivity,
+      usd_received: n.usdReceived === null || n.usdReceived === undefined ? null : Math.round(n.usdReceived),
+      tokens: n.tokens.map(t => ({ symbol: t.symbol, received: round(t.received), sent: round(t.sent), balance: round(t.balance) })),
+      partial: n.partial, source: n.source,
+    })),
+  }));
+  const funded = wallets.some(w => w.networks.length);
+  return {
+    kind: 'wallet_volume',
+    result: funded ? 'funded' : 'no_activity',
+    checked_at: vols.map(v => v.at).sort()[0] || now,
+    detail: { note: 'Lifetime on-chain totals from public explorers; USD at the price when checked.', wallets },
+  };
+}
+
 async function submit(apiKey, tabId, form) {
   const state = await getTab(tabId);
   if (!state?.host || !isCheckable(state.host)) throw new ApiError(0, 'bad_page', 'This page cannot be submitted');
   const now = new Date().toISOString();
   const domain = canonical(state.host);
-  const addresses = [...new Set((form.wallets || []).map(a => String(a).trim()).filter(Boolean))].slice(0, 500);
-  const where = Object.fromEntries((state.wallets || []).map(w => [w.address, w.where]));
+  const raw = [...new Set((form.wallets || []).map(a => String(a).trim()).filter(Boolean))].slice(0, 500);
+  // Hard gate, as in the reference validator: every address must decode and pass its checksum.
+  const bad = raw.filter(a => !describeWallet(a));
+  if (bad.length) throw new ApiError(0, 'invalid_wallet', bad.slice(0, 3).map(whyInvalid).join(' '));
+  const byAddress = new Map((state.wallets || []).map(w => [w.address, w]));
+  const wallets = [...new Map(raw.map(a => describeWallet(a, byAddress.get(a)?.where)).map(w => [w.address, w])).values()];
+  const addresses = wallets.map(w => w.address);
 
   const bundle = {
     domain,
@@ -330,10 +437,12 @@ async function submit(apiKey, tabId, form) {
   if (form.title) bundle.title = String(form.title).slice(0, 500);
   if (form.comment?.trim()) bundle.comment = form.comment.trim();
   if (addresses.length) {
-    bundle.wallets = addresses.map(address => ({
-      address,
+    bundle.wallets = wallets.map(w => ({
+      address: w.address,
+      // 0x addresses are the same on every EVM chain; let the hub apply its default rather than guess.
+      chain: W.EVM_CHAINS.includes(w.chain) ? undefined : w.chain,
       source_url: state.url,
-      method: where[address] ? 'extension:' + where[address] : 'extension:manual',
+      method: 'extension:' + (byAddress.get(w.address)?.where || 'manual'),
       seen_at: now,
     }));
   }
@@ -341,9 +450,13 @@ async function submit(apiKey, tabId, form) {
   if (reasons.length) {
     bundle.reasons = reasons.map(code => ({ code, detail: form.reasonDetail?.trim() || undefined, evidence_url: state.url }));
   }
+  bundle.checks = [];
   if (state.scope) {
-    bundle.checks = [{ kind: 'scope', result: state.scope.decision, detail: { axis: state.scope.axis, reason: state.scope.reason }, checked_at: state.scope.at }];
+    bundle.checks.push({ kind: 'scope', result: state.scope.decision, detail: { axis: state.scope.axis, reason: state.scope.reason }, checked_at: state.scope.at });
   }
+  const volumeCheck = form.includeVolume ? volumeReport(wallets.map(w => byAddress.get(w.address)?.volume).filter(Boolean), now) : null;
+  if (volumeCheck) bundle.checks.push(volumeCheck);
+  if (!bundle.checks.length) delete bundle.checks;
   if (form.includeHtml) {
     try {
       const html = await pageHtml(tabId);
@@ -402,10 +515,13 @@ async function handleContent(msg, sender) {
 
   if (msg.type === 'page:wallets') {
     if (state.ignored && !msg.forced) return base;
-    const incoming = (msg.wallets || []).slice(0, 200).filter(w => typeof w?.address === 'string' && w.address.length <= 140);
+    // Re-validate: only structurally real addresses (checksum, version, prefix) are kept.
+    const incoming = (msg.wallets || []).slice(0, 200)
+      .map(w => (typeof w?.address === 'string' && w.address.length <= 140 ? describeWallet(w.address, w.where) : null))
+      .filter(Boolean);
     const known = new Map((state.wallets || []).map(w => [w.address, w]));
     const merged = [...known.values()];
-    for (const w of incoming) if (!known.has(w.address)) merged.push({ address: w.address, guess: w.guess, confidence: w.confidence, where: w.where });
+    for (const w of incoming) if (!known.has(w.address)) { known.set(w.address, w); merged.push(w); }
     const needs = merged.filter(w => !w.result);
     const checked = needs.length ? await checkWallets(apiKey, state.host, needs) : [];
     const byAddr = new Map(checked.map(w => [w.address, w]));
@@ -414,6 +530,7 @@ async function handleContent(msg, sender) {
     await paintBadge(tabId, state);
     await maybeAutoSubmit(apiKey, settings, tabId, state);
     maybeAutoScope(apiKey, settings, tabId, state);
+    if (settings.volume === 'auto' && !state.ignored && state.wallets.some(w => !w.volume)) volumesForTab(tabId);
     return { ...base, wallets: state.wallets, autoSubmitted: state.autoSubmitted };
   }
   return { error: { code: 'unknown_message', message: 'Unknown message' } };
@@ -476,8 +593,19 @@ async function handleExtension(msg) {
       await refreshTab(msg.tabId, state.url, { fresh: true });
       return { result: res };
     }
-    case 'lookup':
-      return { result: (await hub.lookup(apiKey, String(msg.q || '').trim())).data };
+    case 'lookup': {
+      const q = String(msg.q || '').trim();
+      const { settings } = await getConfig();
+      const wallet = describeWallet(q);
+      const invalid = !wallet && W.detectChain(q).chain ? whyInvalid(q) : null;
+      const [result, volume] = await Promise.all([
+        hub.lookup(apiKey, wallet ? wallet.address : q).then(r => r.data),
+        wallet && settings.volume !== 'off' && VOLUME_CHAINS.has(wallet.chain) ? volumeFor(wallet).catch(() => null) : null,
+      ]);
+      return { result, wallet, invalid, volume };
+    }
+    case 'tab:volumes':
+      return { wallets: await volumesForTab(msg.tabId) };
   }
   throw new ApiError(0, 'unknown_message', 'Unknown message');
 }
@@ -521,7 +649,7 @@ async function rotateKey(apiKey) {
 async function ensureContentScript(tabId) {
   const ok = await ext.tabs.sendMessage(tabId, { type: 'page:ping' }).catch(() => null);
   if (ok?.pong) return;
-  await ext.scripting.executeScript({ target: { tabId }, files: ['content.js'] }).catch(() => null);
+  await ext.scripting.executeScript({ target: { tabId }, files: ['lib/wallets.js', 'content.js'] }).catch(() => null);
 }
 
 ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {

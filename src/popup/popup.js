@@ -1,4 +1,7 @@
 import { ext, REASON_CODES } from '../lib/settings.js';
+import '../lib/wallets.js';
+
+const W = globalThis.BBWallets;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -136,6 +139,79 @@ function walletTags(w) {
   return t;
 }
 
+// ---------- on-chain volume ----------
+
+function fmtAmount(n) {
+  if (n === null || n === undefined) return '—';
+  const a = Math.abs(n);
+  const digits = a >= 1000 ? 0 : a >= 1 ? 4 : 8;
+  return Number(n.toFixed(digits)).toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+const fmtUsd = n => '$' + Math.round(n).toLocaleString();
+
+function ago(when) {
+  const s = (Date.now() - new Date(when).getTime()) / 1000;
+  if (!isFinite(s)) return '';
+  if (s < 3600) return 'within the hour';
+  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+  if (s < 86400 * 60) return Math.floor(s / 86400) + ' days ago';
+  if (s < 86400 * 730) return Math.floor(s / (86400 * 30)) + ' months ago';
+  return Math.floor(s / (86400 * 365)) + ' years ago';
+}
+
+const chainText = w => (W.EVM_CHAINS.includes(w.chain) ? 'EVM (0x)' : W.chainLabel(w.chain));
+
+function volumeHtml(v) {
+  if (!v) return '';
+  if (v.loading) return `<div class="vol muted">Checking on-chain activity…</div>`;
+  const out = [];
+  if (v.usdReceived) out.push(`<b>≈ ${esc(fmtUsd(v.usdReceived))} received</b> <span class="muted">(at today's prices)</span>`);
+  for (const n of v.networks) {
+    const bits = [];
+    if (n.received !== null) bits.push(`in ${fmtAmount(n.received)} ${n.asset}`);
+    if (n.sent !== null) bits.push(`out ${fmtAmount(n.sent)}`);
+    if (n.balance !== null) bits.push(`balance ${fmtAmount(n.balance)} ${n.asset}`);
+    if (n.txCount !== null) bits.push(`${n.txCount.toLocaleString()}${n.partial ? '+' : ''} txs`);
+    if (n.lastActivity) bits.push(`last active ${ago(n.lastActivity)}`);
+    let line = `<b>${esc(n.network)}</b> ${esc(bits.join(' · '))}`;
+    for (const t of n.tokens) {
+      const tb = [];
+      if (t.received !== null) tb.push(`in ${fmtAmount(t.received)}${n.partial ? '+' : ''}`);
+      if (t.sent !== null) tb.push(`out ${fmtAmount(t.sent)}${n.partial ? '+' : ''}`);
+      if (t.balance !== null) tb.push(`balance ${fmtAmount(t.balance)}`);
+      if (tb.length) line += `<br>${esc(t.symbol)} ${esc(tb.join(' · '))}`;
+    }
+    if (n.explorer && /^https:\/\//.test(n.explorer)) line += ` <a href="${esc(n.explorer)}" target="_blank" rel="noopener noreferrer">${esc(n.source || 'explorer')} ↗</a>`;
+    out.push(line);
+  }
+  if (!v.networks.length && v.checked?.length) out.push(`No on-chain activity on ${esc(v.checked.join(', '))}.`);
+  if (v.errors?.length) {
+    // One line per kind of failure, naming the networks it affected.
+    const why = e => (e.code === 'network' ? 'explorer unreachable' : e.code === 'rate_limited' ? 'explorer rate limit, retrying shortly'
+      : e.code === 'timeout' ? 'explorer timed out' : /^http_/.test(e.code) ? `explorer error ${e.code.slice(5)}` : 'explorer error');
+    const groups = new Map();
+    for (const e of v.errors) groups.set(why(e), [...(groups.get(why(e)) || []), W.chainLabel(e.network)]);
+    for (const [reason, names] of groups) out.push(`<span class="muted">Not checked (${esc(reason)}): ${esc(names.join(', '))}</span>`);
+  }
+  return `<div class="vol">${out.join('<br>')}</div>`;
+}
+
+async function loadVolumes() {
+  const ws = state.tab?.wallets || [];
+  if (state.settings?.volume === 'off' || !ws.some(w => !w.volume)) return;
+  ws.forEach(w => { if (!w.volume) w.volume = { loading: true }; });
+  renderWallets();
+  try {
+    const { wallets } = await call({ type: 'tab:volumes', tabId });
+    const byAddr = new Map(wallets.map(w => [w.address, w]));
+    state.tab.wallets = ws.map(w => byAddr.get(w.address) || w);
+  } catch {
+    ws.forEach(w => { if (w.volume?.loading) delete w.volume; });
+  }
+  ws.forEach(w => { if (w.volume?.loading) delete w.volume; });
+  renderWallets();
+}
+
 // Sites a wallet is on beyond the sample shown (the current site is not counted).
 const moreDomains = r => Math.max(0, r.domainCount - (r.onThisDomain ? 1 : 0) - r.sampleDomains.length);
 
@@ -143,8 +219,8 @@ function renderWallets() {
   const ws = state.tab?.wallets || [];
   $('walletCount').textContent = ws.length;
   $('walletList').innerHTML = ws.length
-    ? ws.map(w => `<li>${walletTags(w)}<span class="muted">${esc(w.result?.chain || w.guess)} · ${esc(w.where)}${w.confidence !== 'high' ? ' · unverified shape' : ''}</span><br><code>${esc(w.address)}</code>${
-        w.result?.sampleDomains?.length ? `<br><span class="muted">Also on: ${esc(w.result.sampleDomains.join(', '))}${moreDomains(w.result) ? ` +${moreDomains(w.result)} more` : ''}</span>` : ''}</li>`).join('')
+    ? ws.map(w => `<li>${walletTags(w)}<span class="muted" title="${esc(w.format || '')}">${esc(chainText(w))} · ${esc(w.where)}${w.checksum ? ' · checksum ✓' : w.confidence !== 'high' ? ' · no checksum exists' : ''}</span><br><code>${esc(w.address)}</code>${
+        w.result?.sampleDomains?.length ? `<br><span class="muted">Also on: ${esc(w.result.sampleDomains.join(', '))}${moreDomains(w.result) ? ` +${moreDomains(w.result)} more` : ''}</span>` : ''}${volumeHtml(w.volume)}</li>`).join('')
     : `<li class="muted">None found. Press ↻ to rescan after revealing a deposit address.</li>`;
   if (ws.length && state.effective && ['scam', 'suspected', 'not_in_hub'].includes(state.effective.verdict)) $('walletBox').open = true;
 
@@ -198,6 +274,7 @@ async function load() {
   renderWallets();
   renderSettings();
   renderFooter();
+  loadVolumes();
   // Start the form from the hub's current verdict so a submit does not silently change it.
   const v = state.effective?.verdict;
   if (!state.effective?.parent && ['scam', 'suspected', 'not_scam', 'out_of_scope'].includes(v) && $('verdict').dataset.touched !== '1') $('verdict').value = v;
@@ -236,12 +313,31 @@ $('reasons').addEventListener('change', e => { e.target.dataset.touched = '1'; }
 $('verdict').addEventListener('change', () => { $('verdict').dataset.touched = '1'; });
 $('recordSub').onchange = e => { $('subFields').hidden = !e.target.checked; };
 
+// Extra addresses are validated as you type, with the same rules the background enforces on submit.
+const extraTokens = () => $('extraWallets').value.split(/[\s,;]+/).filter(Boolean);
+function checkExtra() {
+  const lines = extraTokens().slice(0, 30).map(a => {
+    const det = W.detectChain(a);
+    const c = det.chain ? W.validateWallet(det.chain, a) : null;
+    return c?.valid
+      ? `<span class="ok-text">✓ ${esc(chainText({ chain: c.chain }))}</span> <span class="muted">${esc(c.format)}</span>`
+      : `<span class="err-text">✗ ${esc(c ? c.errors[0] : `${a.slice(0, 24)}… is not a recognised wallet address.`)}</span>`;
+  });
+  $('extraCheck').innerHTML = lines.join('<br>');
+  return lines.every(l => l.includes('ok-text'));
+}
+$('extraWallets').addEventListener('input', checkExtra);
+
 $('submitForm').onsubmit = e => {
   e.preventDefault();
   busy($('submitBtn'), async () => {
+    if (!checkExtra()) {
+      setMsg($('submitMsg'), 'Fix or remove the invalid extra addresses first.', 'err');
+      return;
+    }
     const wallets = [
       ...[...document.querySelectorAll('#submitWallets input:checked')].map(i => i.dataset.addr),
-      ...$('extraWallets').value.split(/[\s,;]+/).filter(Boolean),
+      ...extraTokens(),
     ];
     const form = {
       verdict: $('verdict').value,
@@ -251,6 +347,7 @@ $('submitForm').onsubmit = e => {
       comment: $('comment').value,
       title: state.tab?.title,
       includeHtml: $('includeHtml').checked,
+      includeVolume: $('includeVolume').checked,
       recordSubmission: $('recordSub').checked,
       platform: $('platform').value,
       externalId: $('externalId').value,
@@ -265,6 +362,7 @@ $('submitForm').onsubmit = e => {
       const rej = result?.rejected && (Array.isArray(result.rejected) ? result.rejected.length : Object.keys(result.rejected).length);
       setMsg($('submitMsg'), `${result?.created ? 'Added to the hub' : 'Merged into the hub record'}.${rej ? ` ${rej} item(s) rejected: ${JSON.stringify(result.rejected).slice(0, 300)}` : ''}`, rej ? 'err' : 'ok');
       $('extraWallets').value = '';
+      $('extraCheck').innerHTML = '';
       $('comment').value = '';
       await load();
     } catch (err) {
@@ -278,17 +376,22 @@ $('lookupForm').onsubmit = e => {
   const q = $('lookupQ').value.trim();
   if (!q) return;
   $('lookupOut').textContent = 'Searching…';
-  call({ type: 'lookup', q }).then(({ result }) => {
-    const groups = Array.isArray(result) ? result : [];
-    if (!groups.length || groups.every(g => !g.results?.length)) { $('lookupOut').textContent = 'No match in the hub.'; return; }
-    $('lookupOut').innerHTML = groups.filter(g => g.results?.length).map(g => `<b>${esc(g.kind)}</b> · ${g.results.length} match(es)<ul class="wallets">${
-      g.results.slice(0, 5).map(r => {
-        const name = r.domain || r.address || r.ip || r.value || r.uuid || '';
-        const verdict = r.verdict ? ` <span class="tag ${r.verdict === 'scam' ? 't-scam' : r.verdict === 'suspected' ? 't-warn' : 't-grey'}">${esc(r.verdict)}</span>` : '';
-        const doms = r.domains?.length ? `<br><span class="muted">${r.domains.length} domain(s): ${esc(r.domains.slice(0, 5).map(d => d.domain).join(', '))}${r.domains.length > 5 ? ` +${r.domains.length - 5} more` : ''}</span>` : '';
-        const sub = r.submitted !== undefined ? ` <span class="muted">${r.submitted ? 'submitted' : 'not submitted'}</span>` : '';
-        return `<li><code>${esc(name)}</code>${verdict}${sub}${doms}</li>`;
-      }).join('')}</ul>`).join('');
+  call({ type: 'lookup', q }).then(({ result, wallet, invalid, volume }) => {
+    const head = [];
+    if (invalid) head.push(`<p class="err-text">${esc(invalid)}</p>`);
+    if (wallet) head.push(`<p><span class="ok-text">✓ ${esc(chainText(wallet))}</span> <span class="muted">${esc(wallet.format)}</span>${volumeHtml(volume)}</p>`);
+    const groups = (Array.isArray(result) ? result : []).filter(g => g.results?.length);
+    const body = groups.length
+      ? groups.map(g => `<b>${esc(g.kind)}</b> · ${g.results.length} match(es)<ul class="wallets">${
+        g.results.slice(0, 5).map(r => {
+          const name = r.domain || r.address || r.ip || r.value || r.uuid || '';
+          const verdict = r.verdict ? ` <span class="tag ${r.verdict === 'scam' ? 't-scam' : r.verdict === 'suspected' ? 't-warn' : 't-grey'}">${esc(r.verdict)}</span>` : '';
+          const doms = r.domains?.length ? `<br><span class="muted">${r.domains.length} domain(s): ${esc(r.domains.slice(0, 5).map(d => d.domain).join(', '))}${r.domains.length > 5 ? ` +${r.domains.length - 5} more` : ''}</span>` : '';
+          const sub = r.submitted !== undefined ? ` <span class="muted">${r.submitted ? 'submitted' : 'not submitted'}</span>` : '';
+          return `<li><code>${esc(name)}</code>${verdict}${sub}${doms}</li>`;
+        }).join('')}</ul>`).join('')
+      : '<p class="muted">No match in the hub.</p>';
+    $('lookupOut').innerHTML = head.join('') + body;
   }, err => { $('lookupOut').textContent = friendly(err); });
 };
 
