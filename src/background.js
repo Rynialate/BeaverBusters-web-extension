@@ -169,7 +169,7 @@ async function checkWallets(apiKey, host, wallets) {
 
 const BADGE = {
   scam: ['SCAM', '#d52a2b'],
-  suspected: ['SUS', '#c54223'],
+  suspected: ['SUS', '#b45309'],
   not_scam: ['OK', '#007e65'],
   out_of_scope: ['OOS', '#636e72'],
   unknown: ['?', '#636e72'],
