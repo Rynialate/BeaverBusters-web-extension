@@ -18,7 +18,24 @@
       <label class="inline"><input id="keyShow" type="checkbox"> Show key</label>
       <button id="keySave" type="submit" class="primary">Verify and save</button>
       <p id="keyMsg" class="msg" role="status"></p>
+      <pre id="keyRaw" hidden></pre>
     </form>
+  </section>
+
+  <!-- Shown after a rotation until the user confirms they saved the new key. -->
+  <section id="newKeyView" hidden>
+    <header class="bar"><span class="logo">🛡</span><b>New API key</b></header>
+    <div class="pad">
+      <h1>Save your new key now</h1>
+      <p class="muted">The hub shows it only once. Your old key no longer works anywhere, including hub web sessions signed in with it. This extension already uses the new key.</p>
+      <label for="newKeyOut">New API key</label>
+      <div class="row">
+        <input id="newKeyOut" type="text" readonly spellcheck="false">
+        <button id="newKeyCopy" type="button">Copy</button>
+      </div>
+      <p id="newKeyMsg" class="msg" role="status"></p>
+      <button id="newKeyDone" type="button" class="primary">I've saved it</button>
+    </div>
   </section>
 
   <section id="mainView" hidden>
@@ -101,6 +118,10 @@
         <textarea id="ignoreList" rows="4" spellcheck="false"></textarea>
         <button id="saveIgnore">Save ignored sites</button>
         <p id="settingsMsg" class="msg" role="status"></p>
+        <label>API key</label>
+        <p class="muted small">Rotating issues a new key and immediately disables the current one everywhere.</p>
+        <button id="rotateKey" type="button">Rotate API key</button>
+        <p id="rotateMsg" class="msg" role="status"></p>
       </div>
     </details>
 

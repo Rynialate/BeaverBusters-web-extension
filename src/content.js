@@ -27,7 +27,7 @@
   ];
 
   const ATTRS = ['value', 'data-clipboard-text', 'data-address', 'data-wallet', 'data-copy', 'data-text', 'data-value', 'title', 'aria-label', 'alt', 'placeholder'];
-  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'CODE']);
+  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG']);
   const MAX_TEXT = 1_500_000;
 
   // ---------- base58check (BTC/LTC/DOGE/DASH/TRX legacy addresses) ----------
@@ -237,7 +237,7 @@
     .wrap { position: fixed; top: 10px; right: 10px; z-index: 2147483647; font: 12px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #1e272e; }
     .pill { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 14px; border: 0; cursor: pointer;
             color: #fff; font: 600 12px/1 system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
-    .panel { width: 300px; max-width: calc(100vw - 20px); max-height: 40vh; overflow: auto; background: #fff; border-radius: 10px;
+    .panel { box-sizing: border-box; width: 300px; max-width: calc(100vw - 20px); max-height: 40vh; overflow: auto; background: #fff; border-radius: 10px;
              box-shadow: 0 4px 18px rgba(0,0,0,.28); border: 1px solid #dfe6e9; }
     .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: #fff; position: sticky; top: 0; }
     .head b { flex: 1; font-size: 13px; }
@@ -247,7 +247,7 @@
     .muted { color: #636e72; }
     ul { list-style: none; margin: 4px 0 0; padding: 0; }
     li { padding: 5px 0; border-top: 1px solid #f1f2f6; }
-    code { font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+    code { font: 10.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
     .tag { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 4px; color: #fff; }
     .scam { background: #d63031; } .suspected { background: #e17055; } .not_scam { background: #00b894; }
     .neutral { background: #636e72; } .info { background: #0984e3; }

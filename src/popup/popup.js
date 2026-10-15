@@ -33,6 +33,7 @@ async function busy(btn, fn) {
 
 function showKeyView(message) {
   $('mainView').hidden = true;
+  $('newKeyView').hidden = true;
   $('keyView').hidden = false;
   if (message) setMsg($('keyMsg'), message, 'err');
   $('keyInput').focus();
@@ -47,6 +48,8 @@ $('keyForm').onsubmit = async e => {
     try {
       const { me } = await call({ type: 'key:set', key: $('keyInput').value });
       $('keyInput').value = '';
+      $('keyRaw').hidden = true;
+      $('keyRaw').textContent = '';
       setMsg($('keyMsg'), `Welcome, ${me.handle}.`, 'ok');
       await load();
     } catch (err) {
@@ -133,12 +136,15 @@ function walletTags(w) {
   return t;
 }
 
+// Sites a wallet is on beyond the sample shown (the current site is not counted).
+const moreDomains = r => Math.max(0, r.domainCount - (r.onThisDomain ? 1 : 0) - r.sampleDomains.length);
+
 function renderWallets() {
   const ws = state.tab?.wallets || [];
   $('walletCount').textContent = ws.length;
   $('walletList').innerHTML = ws.length
     ? ws.map(w => `<li>${walletTags(w)}<span class="muted">${esc(w.result?.chain || w.guess)} · ${esc(w.where)}${w.confidence !== 'high' ? ' · unverified shape' : ''}</span><br><code>${esc(w.address)}</code>${
-        w.result?.sampleDomains?.length ? `<br><span class="muted">Also on: ${esc(w.result.sampleDomains.join(', '))}</span>` : ''}</li>`).join('')
+        w.result?.sampleDomains?.length ? `<br><span class="muted">Also on: ${esc(w.result.sampleDomains.join(', '))}${moreDomains(w.result) ? ` +${moreDomains(w.result)} more` : ''}</span>` : ''}</li>`).join('')
     : `<li class="muted">None found. Press ↻ to rescan after revealing a deposit address.</li>`;
   if (ws.length && state.effective && ['scam', 'suspected', 'not_in_hub'].includes(state.effective.verdict)) $('walletBox').open = true;
 
@@ -152,8 +158,9 @@ function renderScope(s) {
   out.hidden = false;
   const tagClass = s.decision === 'in_scope' ? 't-scam' : s.decision === 'out_of_scope' ? 't-ok' : 't-grey';
   const sig = s.signals || {};
-  const list = [...(sig.unrealistic_returns || []), ...(sig.blockers || []).map(b => 'blocker: ' + b)];
-  out.innerHTML = `<span class="tag ${tagClass}">${esc(s.decision || 'unknown')}</span>${esc(s.reason || '')}${list.length ? `<br><span class="muted">${esc(list.slice(0, 8).join(', '))}</span>` : ''}`;
+  const reason = (s.reason || '').replace(/^(in[ _]scope|out[ _]of[ _]scope|inconclusive)\s*:\s*/i, '');
+  const list = [...(sig.unrealistic_returns || []).filter(t => !reason.includes(t)), ...(sig.blockers || []).filter(b => !reason.includes(b)).map(b => 'blocker: ' + b)];
+  out.innerHTML = `<span class="tag ${tagClass}">${esc(s.decision || 'unknown')}</span>${esc(reason)}${list.length ? `<br><span class="muted">${esc(list.slice(0, 8).join(', '))}</span>` : ''}`;
   if (s.decision === 'in_scope' && $('verdict').dataset.touched !== '1') {
     $('verdict').value = 'scam';
     const box = document.querySelector('#reasons input[value="unrealistic_returns"]');
@@ -183,7 +190,9 @@ async function load() {
   else [{ id: tabId } = {}] = await ext.tabs.query({ active: true, currentWindow: true });
   state = await call({ type: 'popup:state', tabId });
   if (!state.hasKey) return showKeyView();
+  if (state.newKey) return showNewKey(state.newKey);
   $('keyView').hidden = true;
+  $('newKeyView').hidden = true;
   $('mainView').hidden = false;
   renderStatus();
   renderWallets();
@@ -276,7 +285,7 @@ $('lookupForm').onsubmit = e => {
       g.results.slice(0, 5).map(r => {
         const name = r.domain || r.address || r.ip || r.value || r.uuid || '';
         const verdict = r.verdict ? ` <span class="tag ${r.verdict === 'scam' ? 't-scam' : r.verdict === 'suspected' ? 't-warn' : 't-grey'}">${esc(r.verdict)}</span>` : '';
-        const doms = r.domains?.length ? `<br><span class="muted">${r.domains.length} domain(s): ${esc(r.domains.slice(0, 5).map(d => d.domain).join(', '))}</span>` : '';
+        const doms = r.domains?.length ? `<br><span class="muted">${r.domains.length} domain(s): ${esc(r.domains.slice(0, 5).map(d => d.domain).join(', '))}${r.domains.length > 5 ? ` +${r.domains.length - 5} more` : ''}</span>` : '';
         const sub = r.submitted !== undefined ? ` <span class="muted">${r.submitted ? 'submitted' : 'not submitted'}</span>` : '';
         return `<li><code>${esc(name)}</code>${verdict}${sub}${doms}</li>`;
       }).join('')}</ul>`).join('');
@@ -300,6 +309,54 @@ $('saveIgnore').onclick = async () => {
     renderSettings();
     setMsg($('settingsMsg'), 'Ignored sites saved.', 'ok');
   } catch (e) { setMsg($('settingsMsg'), friendly(e), 'err'); }
+};
+
+// ---------- key rotation ----------
+
+function showNewKey(token, note) {
+  $('keyView').hidden = true;
+  $('mainView').hidden = true;
+  $('newKeyView').hidden = false;
+  $('newKeyOut').value = token;
+  setMsg($('newKeyMsg'), note || '', note ? 'err' : '');
+}
+
+$('newKeyCopy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($('newKeyOut').value);
+    setMsg($('newKeyMsg'), 'Copied.', 'ok');
+  } catch {
+    $('newKeyOut').select();
+    setMsg($('newKeyMsg'), 'Copy blocked; the key is selected, press Ctrl+C / Cmd+C.', 'err');
+  }
+};
+
+$('newKeyDone').onclick = async () => {
+  if (!confirm('Have you stored the new key somewhere safe? It will not be shown again.')) return;
+  $('newKeyOut').value = '';
+  await call({ type: 'key:noticeDone' });
+  await load();
+};
+
+$('rotateKey').onclick = () => {
+  if (!confirm('Rotate your API key?\n\nThe current key stops working immediately, everywhere it is used (other tools, hub web sessions). The new key is shown once.')) return;
+  busy($('rotateKey'), async () => {
+    setMsg($('rotateMsg'), 'Rotating…');
+    try {
+      const res = await call({ type: 'key:rotate' });
+      setMsg($('rotateMsg'), '');
+      if (res.token) {
+        showNewKey(res.token, res.verifyError ? 'Saved, but the hub did not accept the new key yet: ' + friendly(res.verifyError) : '');
+      } else {
+        // Rotated, but the reply had no recognisable key: show it so the key is not lost.
+        showKeyView('The key was rotated but the reply was not understood. Copy the new key from below and paste it here.');
+        $('keyRaw').hidden = false;
+        $('keyRaw').textContent = res.raw;
+      }
+    } catch (e) {
+      setMsg($('rotateMsg'), 'Not rotated: ' + friendly(e), 'err');
+    }
+  });
 };
 
 load().catch(e => showKeyView(friendly(e)));
