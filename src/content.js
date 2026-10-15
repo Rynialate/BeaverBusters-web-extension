@@ -247,7 +247,7 @@
     .muted { color: #636e72; }
     ul { list-style: none; margin: 4px 0 0; padding: 0; }
     li { padding: 5px 0; border-top: 1px solid #f1f2f6; }
-    code { font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+    code { font: 10.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
     .tag { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 4px; color: #fff; }
     .scam { background: #d63031; } .suspected { background: #e17055; } .not_scam { background: #00b894; }
     .neutral { background: #636e72; } .info { background: #0984e3; }

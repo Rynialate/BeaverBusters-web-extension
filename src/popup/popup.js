@@ -158,9 +158,9 @@ function renderScope(s) {
   out.hidden = false;
   const tagClass = s.decision === 'in_scope' ? 't-scam' : s.decision === 'out_of_scope' ? 't-ok' : 't-grey';
   const sig = s.signals || {};
-  const reason = s.reason || '';
+  const reason = (s.reason || '').replace(/^(in[ _]scope|out[ _]of[ _]scope|inconclusive)\s*:\s*/i, '');
   const list = [...(sig.unrealistic_returns || []).filter(t => !reason.includes(t)), ...(sig.blockers || []).filter(b => !reason.includes(b)).map(b => 'blocker: ' + b)];
-  out.innerHTML = `<span class="tag ${tagClass}">${esc(s.decision || 'unknown')}</span>${esc(s.reason || '')}${list.length ? `<br><span class="muted">${esc(list.slice(0, 8).join(', '))}</span>` : ''}`;
+  out.innerHTML = `<span class="tag ${tagClass}">${esc(s.decision || 'unknown')}</span>${esc(reason)}${list.length ? `<br><span class="muted">${esc(list.slice(0, 8).join(', '))}</span>` : ''}`;
   if (s.decision === 'in_scope' && $('verdict').dataset.touched !== '1') {
     $('verdict').value = 'scam';
     const box = document.querySelector('#reasons input[value="unrealistic_returns"]');
