@@ -126,7 +126,7 @@ function summariseWallet(address, rows, host) {
     scamDomains: domains.filter(d => d.verdict === 'scam' || d.verdict === 'suspected').length,
     submitted: domains.some(d => d.submitted),
     onThisDomain: domains.some(d => d.domain === here),
-    sampleDomains: [...new Set(domains.map(d => d.domain))].slice(0, 5),
+    sampleDomains: [...new Set(domains.map(d => d.domain))].filter(d => d !== here).slice(0, 5),
   };
 }
 

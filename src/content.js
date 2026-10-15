@@ -237,7 +237,7 @@
     .wrap { position: fixed; top: 10px; right: 10px; z-index: 2147483647; font: 12px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #1e272e; }
     .pill { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 14px; border: 0; cursor: pointer;
             color: #fff; font: 600 12px/1 system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
-    .panel { width: 300px; max-width: calc(100vw - 20px); max-height: 40vh; overflow: auto; background: #fff; border-radius: 10px;
+    .panel { box-sizing: border-box; width: 300px; max-width: calc(100vw - 20px); max-height: 40vh; overflow: auto; background: #fff; border-radius: 10px;
              box-shadow: 0 4px 18px rgba(0,0,0,.28); border: 1px solid #dfe6e9; }
     .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: #fff; position: sticky; top: 0; }
     .head b { flex: 1; font-size: 13px; }
