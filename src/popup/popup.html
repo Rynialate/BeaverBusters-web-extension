@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BeaverBusters checker</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- Shown until a working key is saved: nothing else in the extension runs without one. -->
+  <section id="keyView" hidden>
+    <header class="bar"><span class="logo">🛡</span><b>BeaverBusters checker</b></header>
+    <form id="keyForm" class="pad">
+      <h1>Enter your API key</h1>
+      <p class="muted">The extension needs your BeaverBusters hub key before it can check sites, wallets or submit anything. It is stored only in this browser and sent only to sdb.netherportal3.com.</p>
+      <label for="keyInput">API key</label>
+      <input id="keyInput" type="password" autocomplete="off" spellcheck="false" placeholder="sbh_…" required>
+      <label class="inline"><input id="keyShow" type="checkbox"> Show key</label>
+      <button id="keySave" type="submit" class="primary">Verify and save</button>
+      <p id="keyMsg" class="msg" role="status"></p>
+    </form>
+  </section>
+
+  <section id="mainView" hidden>
+    <header class="bar">
+      <span class="logo">🛡</span><b id="hostName">—</b>
+      <button id="recheck" class="icon" title="Recheck this page">↻</button>
+    </header>
+
+    <div id="status" class="card"></div>
+
+    <div class="pad actions">
+      <button id="scopeBtn" title="Ask the hub's classifier whether this page is an in-scope investment scam">Classify page</button>
+      <button id="claimBtn" title="Claim this domain for 24 h while you work it">Claim 24 h</button>
+    </div>
+    <div id="scopeOut" class="pad small" hidden></div>
+
+    <details id="walletBox" class="sect">
+      <summary>Wallets on this page <span id="walletCount" class="count">0</span></summary>
+      <ul id="walletList" class="wallets"></ul>
+    </details>
+
+    <details id="submitBox" class="sect">
+      <summary>Submit to hub</summary>
+      <form id="submitForm" class="pad">
+        <label for="verdict">Verdict</label>
+        <select id="verdict">
+          <option value="scam">Scam</option>
+          <option value="suspected">Suspected</option>
+          <option value="not_scam">Not a scam</option>
+          <option value="out_of_scope">Out of scope</option>
+          <option value="">Leave unchanged</option>
+        </select>
+
+        <label>Reasons</label>
+        <div id="reasons" class="chips"></div>
+        <input id="reasonDetail" placeholder="Detail, e.g. 300% in 7 days" maxlength="300">
+
+        <label>Wallets to include</label>
+        <div id="submitWallets" class="checklist"></div>
+        <textarea id="extraWallets" rows="2" placeholder="Extra addresses, one per line" spellcheck="false"></textarea>
+
+        <label for="comment">Comment</label>
+        <textarea id="comment" rows="2" maxlength="2000"></textarea>
+
+        <label class="inline"><input id="includeHtml" type="checkbox" checked> Attach page HTML as evidence</label>
+        <label class="inline"><input id="recordSub" type="checkbox"> I reported it — record a submission</label>
+        <div id="subFields" hidden>
+          <input id="platform" placeholder="Platform (default scambusters)">
+          <input id="externalId" placeholder="Report ID (optional)">
+        </div>
+
+        <button type="submit" class="primary" id="submitBtn">Submit</button>
+        <p id="submitMsg" class="msg" role="status"></p>
+      </form>
+    </details>
+
+    <details class="sect">
+      <summary>Look up anything</summary>
+      <form id="lookupForm" class="pad row">
+        <input id="lookupQ" placeholder="Domain, URL, wallet, IP…" spellcheck="false">
+        <button type="submit">Go</button>
+      </form>
+      <div id="lookupOut" class="pad small"></div>
+    </details>
+
+    <details class="sect">
+      <summary>Settings</summary>
+      <div class="pad">
+        <label class="inline"><input type="checkbox" data-set="autoCheck"> Check every site I visit</label>
+        <label class="inline"><input type="checkbox" data-set="walletScan"> Find and check wallet addresses on pages</label>
+        <label class="inline"><input type="checkbox" data-set="autoSubmitWallets"> Auto-add new wallets to sites the hub already flags</label>
+        <label class="inline"><input type="checkbox" data-set="autoScope"> Auto-classify unknown sites that show wallets (sends page HTML)</label>
+        <label for="widgetMode">Corner widget</label>
+        <select id="widgetMode" data-set="widget">
+          <option value="alerts">Only for scams or wallets</option>
+          <option value="always">Always (minimised)</option>
+          <option value="never">Never</option>
+        </select>
+        <label for="ignoreList">Ignored sites (one per line)</label>
+        <textarea id="ignoreList" rows="4" spellcheck="false"></textarea>
+        <button id="saveIgnore">Save ignored sites</button>
+        <p id="settingsMsg" class="msg" role="status"></p>
+      </div>
+    </details>
+
+    <footer class="foot">
+      <span id="who"></span>
+      <span id="rate" class="muted"></span>
+      <button id="changeKey" class="link">Change key</button>
+    </footer>
+  </section>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
