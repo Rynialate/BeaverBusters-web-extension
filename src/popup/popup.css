@@ -1,6 +1,6 @@
 :root {
   --bg: #ffffff; --fg: #1e272e; --muted: #636e72; --line: #dfe6e9; --soft: #f5f6fa;
-  --accent: #d52a2b; --info: #0871c3; --ok: #007e65; --warn: #c54223; --grey: #636e72;
+  --accent: #d52a2b; --info: #0871c3; --ok: #007e65; --warn: #b45309; --grey: #636e72;
   --err-text: #d52a2b; --ok-text: #007e65; --link: #0871c3;
 }
 @media (prefers-color-scheme: dark) {
@@ -21,7 +21,7 @@ h1 { font-size: 15px; margin: 0 0 6px; }
 button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--soft); color: var(--fg); border-radius: 6px; padding: 6px 10px; }
 button:disabled { opacity: .6; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; margin-top: 10px; font-weight: 600; }
-button.icon { background: rgba(255,255,255,.2); border: 0; color: #fff; width: 26px; height: 26px; padding: 0; font-size: 15px; }
+button.icon { background: rgba(0,0,0,.18); border: 0; color: #fff; width: 26px; height: 26px; padding: 0; font-size: 15px; }
 button.link { background: none; border: 0; color: var(--link); padding: 0; }
 label { display: block; margin: 8px 0 3px; font-weight: 600; font-size: 12px; }
 label.inline { display: flex; gap: 6px; align-items: flex-start; font-weight: 400; margin: 6px 0; }
