@@ -16,7 +16,7 @@
     /\b(?:bitcoincash:)?[qp][02-9ac-hj-np-z]{41}\b/gi, // CashAddr
     /\baddr1[02-9ac-hj-np-z]{50,120}\b/g, // Cardano
     /\bX-avax1[02-9ac-hj-np-z]{38}\b/gi, // Avalanche X-Chain
-    /(?<![A-Za-z0-9_+/-])[EU]Q[A-Za-z0-9_+/-]{46}(?![A-Za-z0-9_+/-])/g, // TON
+    /(?<![A-Za-z0-9_+/-])[EU][Qf][A-Za-z0-9_+/-]{46}(?![A-Za-z0-9_+/-])/g, // TON (EQ/UQ basechain, Ef/Uf masterchain)
     new RegExp(`\\b[${B58}]{25,44}\\b`, 'g'), // Base58: BTC/LTC/DOGE/DASH/TRX legacy, XRP, Solana
   ];
 

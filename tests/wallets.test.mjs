@@ -2,7 +2,7 @@
 // run against src/lib/wallets.js, plus tests for the port's documented additions (Base, Solana,
 // TON) and a few extra Python-parity checks.
 //
-//   node --test tests/
+//   node --test tests/*.mjs     (or plain `node --test` from the repo root; Node 22 does not take a bare directory)
 //
 // Every case and assertion of the Python suite is kept, under the Python test's name. The Python
 // suite builds some addresses with a seeded RNG (random.Random(1337)); those were produced once by
@@ -831,7 +831,7 @@ describe('XrpTests', () => {
       assert.deepEqual(W.validateXrpDestTag(' 007 '), ['7', null]);
       assert.deepEqual(W.validateXrpDestTag('4294967295'), ['4294967295', null]);
     });
-    for (const bad of ['', '   ', '-1', '1.5', 'abc', '4294967296', '１２']) {
+    for (const bad of ['', '   ', '-1', '1.5', 'abc', '4294967296', '\uff11\uff12'] /* fullwidth '１２' */) {
       it(`rejects ${JSON.stringify(bad)}`, () => {
         const [value, error] = W.validateXrpDestTag(bad);
         assert.equal(value, null);
@@ -1041,10 +1041,12 @@ describe('Extra parity: whitespace follows Python str.strip()/str.isspace()', ()
     });
   }
   it('U+FEFF is not whitespace in Python: kept, and the address is rejected', () => {
-    const check = W.validateWallet('btc', '﻿' + A + '﻿');
-    assert.equal(check.input, '﻿' + A + '﻿');
+    const check = W.validateWallet('btc', '\ufeff' + A + '\ufeff');
+    assert.equal(check.input, '\ufeff' + A + '\ufeff');
     assert.equal(check.valid, false);
     assert.deepEqual(check.errors, ['Not a valid Bitcoin address: expected a Base58 address starting with 1, 3 or bc1.']);
-    assert.deepEqual(W.validateXrpDestTag('﻿5'), [null, 'A destination tag is a whole number (digits only).']);
+    assert.deepEqual(W.validateWallet('btc', A.slice(0, 10) + '\ufeff' + A.slice(10)).errors,
+      ['Not a valid Bitcoin address: expected a Base58 address starting with 1, 3 or bc1.']);
+    assert.deepEqual(W.validateXrpDestTag('\ufeff5'), [null, 'A destination tag is a whole number (digits only).']);
   });
 });

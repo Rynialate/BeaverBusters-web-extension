@@ -8,6 +8,37 @@
 // Plain script (no import/export) so the same file runs as a content script and is imported
 // for its side effect by the background and popup modules. Everything is synchronous.
 (() => {
+  // ------------------------------------------------- Python string semantics
+  // The reference is Python; these keep strip()/isspace(), len() and repr() behaving the same.
+
+  // str.isspace(): note U+001C-U+001F and U+0085 are included and U+FEFF is not (unlike JS \s/trim).
+  const PY_WS = '\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';
+  const PY_STRIP_RE = new RegExp(`^[${PY_WS}]+|[${PY_WS}]+$`, 'g');
+  const PY_SPACE_RE = new RegExp(`[${PY_WS}]`);
+  const pyStrip = s => String(s ?? '').replace(PY_STRIP_RE, '');
+  const cpLen = s => [...s].length; // len() counts code points, .length counts UTF-16 units
+
+  // repr() of a string (or None / a number), as used in the reference's error messages.
+  function pyRepr(v) {
+    if (v === null || v === undefined) return 'None';
+    if (typeof v === 'boolean') return v ? 'True' : 'False';
+    if (typeof v !== 'string') return String(v);
+    const q = v.includes("'") && !v.includes('"') ? '"' : "'";
+    let out = '';
+    for (const ch of v) {
+      const cp = ch.codePointAt(0);
+      if (ch === '\\' || ch === q) out += '\\' + ch;
+      else if (ch === '\n') out += '\\n';
+      else if (ch === '\r') out += '\\r';
+      else if (ch === '\t') out += '\\t';
+      else if (cp < 0x20 || (cp >= 0x7f && cp <= 0xa0) || cp === 0xad) out += '\\x' + cp.toString(16).padStart(2, '0');
+      else if (/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]|[^\P{Zs} ]/u.test(ch)) out += cp > 0xffff ? '\\U' + cp.toString(16).padStart(8, '0') : '\\u' + cp.toString(16).padStart(4, '0');
+      else out += ch;
+    }
+    return q + out + q;
+  }
+  const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
   // ------------------------------------------------------------------ SHA-256
 
   const K256 = new Uint32Array([
@@ -134,7 +165,7 @@
     let n = 0n;
     for (const ch of text) {
       const v = B58_INDEX.get(ch);
-      if (v === undefined) throw new DecodeError(`invalid Base58 character '${ch}'`);
+      if (v === undefined) throw new DecodeError(`invalid Base58 character ${pyRepr(ch)}`);
       n = n * 58n + v;
     }
     const body = [];
@@ -188,7 +219,7 @@
     }
     return chk;
   }
-  const hrpExpand = hrp => [...[...hrp].map(c => c.charCodeAt(0) >> 5), 0, ...[...hrp].map(c => c.charCodeAt(0) & 31)];
+  const hrpExpand = hrp => [...[...hrp].map(c => c.codePointAt(0) >> 5), 0, ...[...hrp].map(c => c.codePointAt(0) & 31)];
 
   function bech32CreateChecksum(hrp, data, spec) {
     const c = spec === 'bech32m' ? BECH32M_CONST : BECH32_CONST;
@@ -224,7 +255,7 @@
     const maxv = (1 << tobits) - 1;
     const maxAcc = (1 << (frombits + tobits - 1)) - 1;
     for (const value of data) {
-      if (value < 0 || value >> frombits) return null;
+      if (value < 0 || value >= 2 ** frombits) return null;
       acc = ((acc << frombits) | value) & maxAcc;
       bits += frombits;
       while (bits >= tobits) { bits -= tobits; ret.push((acc >> bits) & maxv); }
@@ -267,7 +298,7 @@
     }
     return c ^ 1n;
   }
-  const cashPrefixExpand = prefix => [...[...prefix].map(c => c.charCodeAt(0) & 0x1f), 0];
+  const cashPrefixExpand = prefix => [...[...prefix].map(c => c.codePointAt(0) & 0x1f), 0];
 
   function cashaddrDecode(address, defaultPrefix = 'bitcoincash') {
     if (address.toLowerCase() !== address && address.toUpperCase() !== address) throw new DecodeError('mixed upper and lower case');
@@ -305,7 +336,7 @@
     sol: 'Solana', ton: 'TON', // additions
   };
   const EVM_CHAINS = ['eth', 'bsc', 'matic', 'arb', 'avax', 'op', 'base']; // ETH first = default for 0x
-  const chainLabel = code => CHAINS[code] || code;
+  const chainLabel = code => (own(CHAINS, code) ? CHAINS[code] : code);
 
   const XRP_ALPHABET = 'rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz';
   const XRP_TO_B58 = new Map([...XRP_ALPHABET].map((c, i) => [c, B58_ALPHABET[i]]));
@@ -319,7 +350,7 @@
   const B58_RE = new RegExp(`^[${B58_ALPHABET}]+$`);
   const BARE_CASHADDR_RE = /^[qp][qpzry9x8gf2tvdw0s3jn54khce6mua7l]{41}$/;
   const SOL_RE = new RegExp(`^[${B58_ALPHABET}]{32,44}$`);
-  const TON_RE = /^[EU]Q[A-Za-z0-9_\-+/]{46}$/;
+  const TON_RE = /^[EUk0][Qf][A-Za-z0-9_\-+/]{46}$/;
 
   const B58_VERSIONS = {
     0x00: ['btc', 'P2PKH (legacy)'], 0x05: ['btc', 'P2SH'], 0x41: ['trx', 'Base58Check'],
@@ -330,10 +361,10 @@
   const detection = (chain, candidates = [], note = '') => ({ chain, candidates, note });
 
   function detectChain(raw) {
-    const address = (raw || '').trim();
+    const address = pyStrip(raw);
     if (!address) return detection(null);
     if (EVM_RE.test(address)) {
-      return detection('eth', EVM_CHAINS, '0x addresses look identical on every EVM chain — pick the network the site actually uses.');
+      return detection('eth', [...EVM_CHAINS], '0x addresses look identical on every EVM chain — pick the network the site actually uses.');
     }
     const lower = address.toLowerCase();
     if (lower.startsWith('x-avax1')) return detection('avax', ['avax'], 'Avalanche X-Chain address');
@@ -408,7 +439,7 @@
   }
 
   function validateTrx(address) {
-    if (address.length !== 34 || !address.startsWith('T')) throw new DecodeError('expected 34 characters starting with T');
+    if (cpLen(address) !== 34 || !address.startsWith('T')) throw new DecodeError('expected 34 characters starting with T');
     return base58Versions(address, { 0x41: 'Base58Check' }, 'T');
   }
 
@@ -460,7 +491,7 @@
   }
 
   function validateXrpDestTag(raw) {
-    const tag = (raw || '').trim();
+    const tag = pyStrip(raw);
     if (!tag) return [null, 'Enter the destination tag (memo) shown with this XRP address.'];
     if (!/^[0-9]+$/.test(tag)) return [null, 'A destination tag is a whole number (digits only).'];
     const value = BigInt(tag);
@@ -487,7 +518,7 @@
     return crc;
   }
   function validateTon(address) {
-    if (!TON_RE.test(address)) throw new DecodeError('expected a 48-character user-friendly TON address (EQ…/UQ…)');
+    if (!TON_RE.test(address)) throw new DecodeError('expected a 48-character user-friendly TON address (EQ…/UQ…/Ef…/Uf…)');
     let bin;
     try { bin = atob(address.replace(/-/g, '+').replace(/_/g, '/')); } catch { throw new DecodeError('invalid base64'); }
     const raw = Uint8Array.from(bin, ch => ch.charCodeAt(0));
@@ -515,13 +546,13 @@
 
   // The hard gate: decode, verify the chain's checksum and version/prefix. Mirrors validate_wallet().
   function validateWallet(chain, raw) {
-    const address = (raw || '').trim();
+    const address = pyStrip(raw);
     const det = detectChain(address);
     const check = { chain, input: address, valid: false, canonical: null, key: null, format: null, checksum: false, errors: [], detected: det };
-    if (!(chain in CHAINS)) { check.errors.push(`Unsupported chain '${chain}'.`); return check; }
+    if (!own(CHAINS, chain)) { check.errors.push(`Unsupported chain ${pyRepr(chain)}.`); return check; }
     if (!address) { check.errors.push('Enter a wallet address.'); return check; }
-    if (/\s/.test(address)) { check.errors.push('The address contains spaces.'); return check; }
-    if (address.length > 128) { check.errors.push('That is too long to be a wallet address.'); return check; }
+    if (PY_SPACE_RE.test(address)) { check.errors.push('The address contains spaces.'); return check; }
+    if (cpLen(address) > 128) { check.errors.push('That is too long to be a wallet address.'); return check; }
     let result;
     try {
       if (chain === 'avax' && address.toLowerCase().startsWith('x-')) result = validateAvaxX(address);
@@ -544,6 +575,8 @@
     const det = detectChain(raw);
     if (!det.chain) return null;
     const c = validateWallet(det.chain, raw);
+    // No Solana fallback when another chain's rule claimed the string: Solana has no checksum, so a
+    // mistyped bc1…/ltc1…/addr1… address could otherwise be reported as a Solana key.
     return c.valid ? c : null;
   }
 
