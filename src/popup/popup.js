@@ -33,6 +33,7 @@ async function busy(btn, fn) {
 
 function showKeyView(message) {
   $('mainView').hidden = true;
+  $('newKeyView').hidden = true;
   $('keyView').hidden = false;
   if (message) setMsg($('keyMsg'), message, 'err');
   $('keyInput').focus();
@@ -47,6 +48,8 @@ $('keyForm').onsubmit = async e => {
     try {
       const { me } = await call({ type: 'key:set', key: $('keyInput').value });
       $('keyInput').value = '';
+      $('keyRaw').hidden = true;
+      $('keyRaw').textContent = '';
       setMsg($('keyMsg'), `Welcome, ${me.handle}.`, 'ok');
       await load();
     } catch (err) {
@@ -183,7 +186,9 @@ async function load() {
   else [{ id: tabId } = {}] = await ext.tabs.query({ active: true, currentWindow: true });
   state = await call({ type: 'popup:state', tabId });
   if (!state.hasKey) return showKeyView();
+  if (state.newKey) return showNewKey(state.newKey);
   $('keyView').hidden = true;
+  $('newKeyView').hidden = true;
   $('mainView').hidden = false;
   renderStatus();
   renderWallets();
@@ -300,6 +305,54 @@ $('saveIgnore').onclick = async () => {
     renderSettings();
     setMsg($('settingsMsg'), 'Ignored sites saved.', 'ok');
   } catch (e) { setMsg($('settingsMsg'), friendly(e), 'err'); }
+};
+
+// ---------- key rotation ----------
+
+function showNewKey(token, note) {
+  $('keyView').hidden = true;
+  $('mainView').hidden = true;
+  $('newKeyView').hidden = false;
+  $('newKeyOut').value = token;
+  setMsg($('newKeyMsg'), note || '', note ? 'err' : '');
+}
+
+$('newKeyCopy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($('newKeyOut').value);
+    setMsg($('newKeyMsg'), 'Copied.', 'ok');
+  } catch {
+    $('newKeyOut').select();
+    setMsg($('newKeyMsg'), 'Copy blocked; the key is selected, press Ctrl+C / Cmd+C.', 'err');
+  }
+};
+
+$('newKeyDone').onclick = async () => {
+  if (!confirm('Have you stored the new key somewhere safe? It will not be shown again.')) return;
+  $('newKeyOut').value = '';
+  await call({ type: 'key:noticeDone' });
+  await load();
+};
+
+$('rotateKey').onclick = () => {
+  if (!confirm('Rotate your API key?\n\nThe current key stops working immediately, everywhere it is used (other tools, hub web sessions). The new key is shown once.')) return;
+  busy($('rotateKey'), async () => {
+    setMsg($('rotateMsg'), 'Rotating…');
+    try {
+      const res = await call({ type: 'key:rotate' });
+      setMsg($('rotateMsg'), '');
+      if (res.token) {
+        showNewKey(res.token, res.verifyError ? 'Saved, but the hub did not accept the new key yet: ' + friendly(res.verifyError) : '');
+      } else {
+        // Rotated, but the reply had no recognisable key: show it so the key is not lost.
+        showKeyView('The key was rotated but the reply was not understood. Copy the new key from below and paste it here.');
+        $('keyRaw').hidden = false;
+        $('keyRaw').textContent = res.raw;
+      }
+    } catch (e) {
+      setMsg($('rotateMsg'), 'Not rotated: ' + friendly(e), 'err');
+    }
+  });
 };
 
 load().catch(e => showKeyView(friendly(e)));

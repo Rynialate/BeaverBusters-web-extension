@@ -91,6 +91,7 @@ const enc = encodeURIComponent;
 
 export const hub = {
   me: key => request(key, 'GET', '/me'),
+  rotate: key => request(key, 'POST', '/me/rotate'),
   check: (key, domain) => request(key, 'GET', '/check', { query: { domain } }),
   domain: (key, domain) => request(key, 'GET', `/domains/${enc(domain)}`, { query: { include: 'wallets,reasons,submissions' } }),
   wallet: (key, address) => request(key, 'GET', `/wallets/${enc(address)}`),

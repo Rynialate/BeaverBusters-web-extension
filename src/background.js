@@ -375,6 +375,8 @@ async function submit(apiKey, tabId, form) {
 async function popupState(tabId) {
   const { apiKey, me, settings } = await getConfig();
   if (!apiKey) return { hasKey: false };
+  const { pendingKey } = await ext.storage.local.get('pendingKey');
+  if (pendingKey) return { hasKey: true, newKey: apiKey, me };
   let tab = null;
   if (tabId !== undefined) {
     const t = await ext.tabs.get(tabId).catch(() => null);
@@ -429,8 +431,13 @@ async function handleExtension(msg) {
       await paintReady();
       return { me };
     }
+    case 'key:rotate':
+      return rotateKey(apiKey);
+    case 'key:noticeDone':
+      await ext.storage.local.remove('pendingKey');
+      return { ok: true };
     case 'key:clear':
-      await ext.storage.local.remove(['apiKey', 'me']);
+      await ext.storage.local.remove(['apiKey', 'me', 'pendingKey']);
       await session.clear();
       await paintNoKey();
       return { ok: true };
@@ -473,6 +480,41 @@ async function handleExtension(msg) {
       return { result: (await hub.lookup(apiKey, String(msg.q || '').trim())).data };
   }
   throw new ApiError(0, 'unknown_message', 'Unknown message');
+}
+
+// ---------- key rotation ----------
+
+// The hub returns the new token once. Its exact field name is not documented, so accept the
+// likely shapes; anything that looks like a key is taken.
+function tokenFrom(res) {
+  const d = res?.data ?? res;
+  const cands = typeof d === 'string' ? [d] : [d?.token, d?.key, d?.api_key, d?.secret, d?.key?.token, res?.token];
+  return cands.find(t => typeof t === 'string' && /^[\x21-\x7e]{16,200}$/.test(t)) || null;
+}
+
+async function rotateKey(apiKey) {
+  if (!apiKey) throw new ApiError(401, 'no_key', 'Enter your API key first');
+  const res = await hub.rotate(apiKey);
+  // From here on the old key is dead, so never throw away the response.
+  const token = tokenFrom(res);
+  if (!token) {
+    await ext.storage.local.remove(['apiKey', 'me', 'pendingKey']);
+    await session.clear();
+    await paintNoKey();
+    return { rotated: true, token: null, raw: JSON.stringify(res).slice(0, 4000) };
+  }
+  // Keep the new key on screen until the user confirms they saved it; the popup can close any time.
+  await ext.storage.local.set({ apiKey: token, pendingKey: true });
+  await session.clear();
+  let me = null;
+  try {
+    me = (await hub.me(token)).data;
+    await ext.storage.local.set({ me });
+  } catch (e) {
+    return { rotated: true, token, me: null, verifyError: errInfo(e) };
+  }
+  await paintReady();
+  return { rotated: true, token, me };
 }
 
 // Pages opened before install have no content script; inject on demand.

@@ -18,6 +18,7 @@ checked against the hub's `GET /me` before it is saved.
 | Submission | One bundle with verdict, reasons, selected wallets, comment, gzip'd HTML snapshot, the scope result and an optional "I reported it" submission record. | `POST /ingest` |
 | Claim | Claim or release a domain for 24 h. | `POST/DELETE /domains/{d}/claim` |
 | Look up anything | Domain, URL, wallet, IP, urlscan id, fingerprint. | `GET /lookup` |
+| Key rotation | **Settings → Rotate API key** issues a new key and switches the extension to it. The old key stops working everywhere at once. The new key stays on screen, with a Copy button, until you confirm you saved it, even if the popup closes. | `POST /me/rotate` |
 
 Optional automation (off by default, in **Settings**):
 
