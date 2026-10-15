@@ -168,16 +168,16 @@ async function checkWallets(apiKey, host, wallets) {
 // ---------- badge ----------
 
 const BADGE = {
-  scam: ['SCAM', '#d63031'],
-  suspected: ['SUS', '#e17055'],
-  not_scam: ['OK', '#00b894'],
+  scam: ['SCAM', '#d52a2b'],
+  suspected: ['SUS', '#c54223'],
+  not_scam: ['OK', '#007e65'],
   out_of_scope: ['OOS', '#636e72'],
   unknown: ['?', '#636e72'],
 };
 
 async function paintBadge(tabId, state) {
   const eff = effective(state?.check);
-  let text = '', color = '#0984e3', title = 'BeaverBusters checker';
+  let text = '', color = '#0871c3', title = 'BeaverBusters checker';
   if (eff && BADGE[eff.verdict]) {
     [text, color] = BADGE[eff.verdict];
     title = `${eff.via}: ${eff.verdict.replace('_', ' ')}${eff.submitted ? ' (submitted)' : ''}${eff.parent ? ' — parent domain' : ''}`;

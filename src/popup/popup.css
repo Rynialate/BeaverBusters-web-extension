@@ -1,9 +1,11 @@
 :root {
   --bg: #ffffff; --fg: #1e272e; --muted: #636e72; --line: #dfe6e9; --soft: #f5f6fa;
-  --accent: #d63031; --info: #0984e3; --ok: #00b894; --warn: #e17055; --grey: #636e72;
+  --accent: #d52a2b; --info: #0871c3; --ok: #007e65; --warn: #c54223; --grey: #636e72;
+  --err-text: #d52a2b; --ok-text: #007e65; --link: #0871c3;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #1e272e; --fg: #dfe6e9; --muted: #b2bec3; --line: #2d3436; --soft: #2d3436; }
+  :root { --bg: #1e272e; --fg: #dfe6e9; --muted: #b2bec3; --line: #2d3436; --soft: #2d3436;
+          --err-text: #ff7675; --ok-text: #55efc4; --link: #74b9ff; }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -20,7 +22,7 @@ button { font: inherit; cursor: pointer; border: 1px solid var(--line); backgrou
 button:disabled { opacity: .6; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; margin-top: 10px; font-weight: 600; }
 button.icon { background: rgba(255,255,255,.2); border: 0; color: #fff; width: 26px; height: 26px; padding: 0; font-size: 15px; }
-button.link { background: none; border: 0; color: var(--info); padding: 0; }
+button.link { background: none; border: 0; color: var(--link); padding: 0; }
 label { display: block; margin: 8px 0 3px; font-weight: 600; font-size: 12px; }
 label.inline { display: flex; gap: 6px; align-items: flex-start; font-weight: 400; margin: 6px 0; }
 input:not([type=checkbox]), select, textarea {
@@ -29,7 +31,7 @@ input:not([type=checkbox]), select, textarea {
 textarea { resize: vertical; margin-top: 4px; }
 #subFields input { margin-top: 4px; }
 .msg { min-height: 1em; margin: 8px 0 0; font-size: 12px; }
-.msg.err { color: var(--accent); } .msg.ok { color: var(--ok); }
+.msg.err { color: var(--err-text); } .msg.ok { color: var(--ok-text); }
 .card { margin: 10px 12px 0; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--soft); }
 .card .verdict { display: inline-block; padding: 2px 8px; border-radius: 4px; color: #fff; font-weight: 700; font-size: 12px; }
 .card dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0 0; font-size: 12px; }

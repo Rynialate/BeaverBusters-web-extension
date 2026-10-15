@@ -249,8 +249,8 @@
     li { padding: 5px 0; border-top: 1px solid #f1f2f6; }
     code { font: 10.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
     .tag { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 4px; color: #fff; }
-    .scam { background: #d63031; } .suspected { background: #e17055; } .not_scam { background: #00b894; }
-    .neutral { background: #636e72; } .info { background: #0984e3; }
+    .scam { background: #d52a2b; } .suspected { background: #c54223; } .not_scam { background: #007e65; }
+    .neutral { background: #636e72; } .info { background: #0871c3; }
     @media (prefers-color-scheme: dark) {
       .panel { background: #1e272e; color: #dfe6e9; border-color: #2d3436; }
       li { border-color: #2d3436; } .muted { color: #b2bec3; }
@@ -288,7 +288,7 @@
     }
     host.style.display = '';
     const v = effective?.verdict || 'not_in_hub';
-    const color = { scam: '#d63031', suspected: '#e17055', not_scam: '#00b894', not_in_hub: '#0984e3' }[v] || '#636e72';
+    const color = { scam: '#d52a2b', suspected: '#c54223', not_scam: '#007e65', not_in_hub: '#0871c3' }[v] || '#636e72';
     const label = VERDICT_LABEL[v] || v;
 
     if (collapsed) {
