@@ -27,7 +27,7 @@
   ];
 
   const ATTRS = ['value', 'data-clipboard-text', 'data-address', 'data-wallet', 'data-copy', 'data-text', 'data-value', 'title', 'aria-label', 'alt', 'placeholder'];
-  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'CODE']);
+  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG']);
   const MAX_TEXT = 1_500_000;
 
   // ---------- base58check (BTC/LTC/DOGE/DASH/TRX legacy addresses) ----------
