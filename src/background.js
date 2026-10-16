@@ -3,7 +3,7 @@
 
 import { hub, limits, ApiError, CLIENT_SOURCE } from './lib/api.js';
 import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES } from './lib/settings.js';
-import { walletVolume, usdPrices, addUsd, SUPPORTED as VOLUME_CHAINS } from './lib/volume.js';
+import { walletVolume, usdPrices, addUsd, hasActivity, SUPPORTED as VOLUME_CHAINS } from './lib/volume.js';
 import './lib/wallets.js';
 
 const W = globalThis.BBWallets;
@@ -210,12 +210,13 @@ async function volumeFor(w) {
   const ck = 'vol:' + w.address;
   const v = (await session.get(ck))[ck];
   if (v) {
-    const failed = !v.data.networks.length && v.data.errors.length;
-    if (Date.now() - v.at < (failed ? VOLUME_ERROR_TTL : VOLUME_TTL)) return v.data;
+    // Any explorer error, or a missing USD price, is retried after a short while.
+    const retrySoon = v.data.errors.length > 0 || (v.data.networks.length > 0 && !v.data.pricesAt);
+    if (Date.now() - v.at < (retrySoon ? VOLUME_ERROR_TTL : VOLUME_TTL)) return v.data;
   }
   return once(ck, async () => {
     const vol = await walletVolume(w.chain, w.address);
-    try { addUsd(vol, await prices(vol.networks.map(n => n.asset))); } catch { vol.usdReceived = null; } // the USD estimate is optional
+    try { addUsd(vol, await prices(vol.networks.map(n => n.asset))); } catch { vol.usdReceived = null; vol.pricesAt = null; } // the USD estimate is optional
     await cacheSet(ck, vol);
     return vol;
   });
@@ -395,21 +396,25 @@ function volumeReport(vols, now) {
     chain: v.chain,
     checked_networks: v.checked,
     usd_received: v.usdReceived === null || v.usdReceived === undefined ? null : Math.round(v.usdReceived),
+    usd_partial: !!v.usdPartial,
+    errors: v.errors.map(e => ({ network: e.network, code: e.code })),
     networks: v.networks.map(n => ({
       network: n.network, asset: n.asset,
       received: round(n.received), sent: round(n.sent), balance: round(n.balance),
-      tx_count: n.txCount, first_seen: n.firstSeen, last_activity: n.lastActivity,
+      tx_count: n.txCount, token_transfers: n.tokenTransfers, first_seen: n.firstSeen, last_activity: n.lastActivity,
       usd_received: n.usdReceived === null || n.usdReceived === undefined ? null : Math.round(n.usdReceived),
       tokens: n.tokens.map(t => ({ symbol: t.symbol, received: round(t.received), sent: round(t.sent), balance: round(t.balance) })),
       partial: n.partial, source: n.source,
     })),
   }));
-  const funded = wallets.some(w => w.networks.length);
+  // funded: activity seen; no_activity: checked and empty; unknown: no explorer answered.
+  const active = vols.some(v => v.networks.some(hasActivity));
+  const checked = vols.some(v => v.checked?.length);
   return {
     kind: 'wallet_volume',
-    result: funded ? 'funded' : 'no_activity',
+    result: active ? 'funded' : checked ? 'no_activity' : 'unknown',
     checked_at: vols.map(v => v.at).sort()[0] || now,
-    detail: { note: 'Lifetime on-chain totals from public explorers; USD at the price when checked.', wallets },
+    detail: { note: 'Lifetime on-chain totals from public explorers; UTXO "received" is gross (includes change); USD at the price when checked; usd_partial marks lower bounds.', wallets },
   };
 }
 

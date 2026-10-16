@@ -165,7 +165,7 @@ function volumeHtml(v) {
   if (!v) return '';
   if (v.loading) return `<div class="vol muted">Checking on-chain activity…</div>`;
   const out = [];
-  if (v.usdReceived) out.push(`<b>≈ ${esc(fmtUsd(v.usdReceived))} received</b> <span class="muted">(at today's prices)</span>`);
+  if (v.usdReceived) out.push(`<b>≈ ${esc(fmtUsd(v.usdReceived))}${v.usdPartial ? '+' : ''} received</b> <span class="muted">(at today's prices${v.usdPartial ? '; at least this much' : ''})</span>`);
   for (const n of v.networks) {
     const bits = [];
     if (n.received !== null) bits.push(`in ${fmtAmount(n.received)} ${n.asset}`);
@@ -181,6 +181,7 @@ function volumeHtml(v) {
       if (t.balance !== null) tb.push(`balance ${fmtAmount(t.balance)}`);
       if (tb.length) line += `<br>${esc(t.symbol)} ${esc(tb.join(' · '))}`;
     }
+    if (n.note) line += `<br><span class="muted">${esc(n.note)}</span>`;
     if (n.explorer && /^https:\/\//.test(n.explorer)) line += ` <a href="${esc(n.explorer)}" target="_blank" rel="noopener noreferrer">${esc(n.source || 'explorer')} ↗</a>`;
     out.push(line);
   }

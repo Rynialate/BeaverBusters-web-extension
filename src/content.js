@@ -244,7 +244,7 @@
     }
     const v = w.volume;
     let flow = '';
-    if (v?.usdReceived) flow = `<span class="tag flow" title="Lifetime received, at today's prices">≈ ${esc(fmtUsd(v.usdReceived))} in</span>`;
+    if (v?.usdReceived) flow = `<span class="tag flow" title="Lifetime received, at today's prices${v.usdPartial ? ' (at least)' : ''}">≈ ${esc(fmtUsd(v.usdReceived))}${v.usdPartial ? '+' : ''} in</span>`;
     else if (v && !v.networks?.length && v.checked?.length) flow = `<span class="tag neutral">no on-chain activity</span>`;
     const chain = W.EVM_CHAINS.includes(w.chain) ? 'evm' : w.chain;
     return `<li>${tags}${flow}<span class="muted">${esc(chain)}${w.confidence !== 'high' ? ' (no checksum)' : ''}</span><br><code>${esc(w.address)}</code></li>`;
