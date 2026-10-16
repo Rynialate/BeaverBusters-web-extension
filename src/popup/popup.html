@@ -76,11 +76,13 @@
         <label>Wallets to include</label>
         <div id="submitWallets" class="checklist"></div>
         <textarea id="extraWallets" rows="2" placeholder="Extra addresses, one per line" spellcheck="false"></textarea>
+        <div id="extraCheck" class="small" aria-live="polite"></div>
 
         <label for="comment">Comment</label>
         <textarea id="comment" rows="2" maxlength="2000"></textarea>
 
         <label class="inline"><input id="includeHtml" type="checkbox" checked> Attach page HTML as evidence</label>
+        <label class="inline"><input id="includeVolume" type="checkbox" checked> Include on-chain volume of the selected wallets</label>
         <label class="inline"><input id="recordSub" type="checkbox"> I reported it — record a submission</label>
         <div id="subFields" hidden>
           <input id="platform" placeholder="Platform (default scambusters)">
@@ -114,6 +116,13 @@
           <option value="always">Always (minimised)</option>
           <option value="never">Never</option>
         </select>
+        <label for="volumeMode">On-chain volume</label>
+        <select id="volumeMode" data-set="volume">
+          <option value="popup">When I open the popup</option>
+          <option value="auto">Automatically on every page with wallets</option>
+          <option value="off">Off</option>
+        </select>
+        <p class="muted small">Looks up each wallet on public block explorers (mempool.space, TronGrid, Ethplorer and others), which sends them the address.</p>
         <label for="ignoreList">Ignored sites (one per line)</label>
         <textarea id="ignoreList" rows="4" spellcheck="false"></textarea>
         <button id="saveIgnore">Save ignored sites</button>
