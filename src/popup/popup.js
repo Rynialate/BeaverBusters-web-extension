@@ -159,7 +159,8 @@ function ago(when) {
   return Math.floor(s / (86400 * 365)) + ' years ago';
 }
 
-const chainText = w => (W.EVM_CHAINS.includes(w.chain) ? 'EVM (0x)' : W.chainLabel(w.chain));
+// "EVM" is a property of the 0x form (Avalanche X-Chain addresses are bech32, not EVM).
+const chainText = w => (/^0x/i.test(w.address || '') ? 'EVM (0x)' : W.chainLabel(w.chain));
 
 function volumeHtml(v) {
   if (!v) return '';
@@ -188,7 +189,8 @@ function volumeHtml(v) {
   if (!v.networks.length && v.checked?.length) out.push(`No on-chain activity on ${esc(v.checked.join(', '))}.`);
   if (v.errors?.length) {
     // One line per kind of failure, naming the networks it affected.
-    const why = e => (e.code === 'network' ? 'explorer unreachable' : e.code === 'rate_limited' ? 'explorer rate limit, retrying shortly'
+    const why = e => (e.code === 'unsupported' ? 'no explorer for this chain' : e.code === 'skipped' ? 'too many addresses on this page'
+      : e.code === 'network' ? 'explorer unreachable' : e.code === 'rate_limited' ? 'explorer rate limit, retrying shortly'
       : e.code === 'timeout' ? 'explorer timed out' : /^http_/.test(e.code) ? `explorer error ${e.code.slice(5)}` : 'explorer error');
     const groups = new Map();
     for (const e of v.errors) groups.set(why(e), [...(groups.get(why(e)) || []), W.chainLabel(e.network)]);
@@ -198,25 +200,34 @@ function volumeHtml(v) {
 }
 
 async function loadVolumes() {
-  const ws = state.tab?.wallets || [];
-  if (state.settings?.volume === 'off' || !ws.some(w => !w.volume)) return;
-  ws.forEach(w => { if (!w.volume) w.volume = { loading: true }; });
-  renderWallets();
-  try {
-    const { wallets } = await call({ type: 'tab:volumes', tabId });
-    const byAddr = new Map(wallets.map(w => [w.address, w]));
-    state.tab.wallets = ws.map(w => byAddr.get(w.address) || w);
-  } catch {
-    ws.forEach(w => { if (w.volume?.loading) delete w.volume; });
+  const s = state;
+  const ws = s.tab?.wallets || [];
+  if (s.settings?.volume === 'off' || !ws.length) return;
+  // Always ask: the background refreshes stale or failed entries and answers fresh ones from cache.
+  let marked = false;
+  ws.forEach(w => { if (!w.volume) { w.volume = { loading: true }; marked = true; } });
+  if (marked) renderWalletList();
+  let fresh = null;
+  try { fresh = (await call({ type: 'tab:volumes', tabId })).wallets; } catch { /* keep what is shown */ }
+  if (state !== s) return; // a newer load() has replaced this view
+  const byAddr = new Map((fresh || []).map(w => [w.address, w]));
+  for (const w of ws) {
+    const v = byAddr.get(w.address)?.volume;
+    if (v) w.volume = v;
+    else if (w.volume?.loading) delete w.volume;
   }
-  ws.forEach(w => { if (w.volume?.loading) delete w.volume; });
-  renderWallets();
+  renderWalletList();
 }
 
 // Sites a wallet is on beyond the sample shown (the current site is not counted).
 const moreDomains = r => Math.max(0, r.domainCount - (r.onThisDomain ? 1 : 0) - r.sampleDomains.length);
 
 function renderWallets() {
+  renderWalletList();
+  renderChecklist();
+}
+
+function renderWalletList() {
   const ws = state.tab?.wallets || [];
   $('walletCount').textContent = ws.length;
   $('walletList').innerHTML = ws.length
@@ -225,9 +236,17 @@ function renderWallets() {
     : `<li class="muted">None found. Press ↻ to rescan after revealing a deposit address.</li>`;
   if (ws.length && state.effective && ['scam', 'suspected', 'not_in_hub'].includes(state.effective.verdict)) $('walletBox').open = true;
 
-  // Submit checklist: pre-tick confident addresses not already on record for this site.
-  $('submitWallets').innerHTML = ws.map((w, i) => `<label class="inline"><input type="checkbox" data-addr="${esc(w.address)}" id="sw${i}" ${
-    w.confidence === 'high' && !w.result?.onThisDomain && !w.result?.excluded ? 'checked' : ''}><code>${esc(w.address)}</code></label>`).join('');
+}
+
+// Submit checklist: pre-tick confident addresses not already on record for this site.
+// Choices the user already made are kept when the list is rebuilt.
+function renderChecklist() {
+  const ws = state.tab?.wallets || [];
+  const prev = new Map([...document.querySelectorAll('#submitWallets input')].map(i => [i.dataset.addr, i.checked]));
+  $('submitWallets').innerHTML = ws.map((w, i) => {
+    const ticked = prev.has(w.address) ? prev.get(w.address) : w.confidence === 'high' && !w.result?.onThisDomain && !w.result?.excluded;
+    return `<label class="inline"><input type="checkbox" data-addr="${esc(w.address)}" id="sw${i}" ${ticked ? 'checked' : ''}><code>${esc(w.address)}</code></label>`;
+  }).join('');
 }
 
 function renderScope(s) {
@@ -252,6 +271,12 @@ function renderSettings() {
     else el.value = s[el.dataset.set];
   }
   $('ignoreList').value = (s.ignore || []).join('\n');
+  syncVolumeOption();
+}
+
+// The submit option only makes sense while on-chain lookups are on.
+function syncVolumeOption() {
+  $('includeVolume').closest('label').hidden = state.settings?.volume === 'off';
 }
 
 function renderFooter() {
@@ -321,7 +346,7 @@ function checkExtra() {
     const det = W.detectChain(a);
     const c = det.chain ? W.validateWallet(det.chain, a) : null;
     return c?.valid
-      ? `<span class="ok-text">✓ ${esc(chainText({ chain: c.chain }))}</span> <span class="muted">${esc(c.format)}</span>`
+      ? `<span class="ok-text">✓ ${esc(chainText({ chain: c.chain, address: c.canonical }))}</span> <span class="muted">${esc(c.format)}</span>`
       : `<span class="err-text">✗ ${esc(c ? c.errors[0] : `${a.slice(0, 24)}… is not a recognised wallet address.`)}</span>`;
   });
   $('extraCheck').innerHTML = lines.join('<br>');
@@ -361,7 +386,8 @@ $('submitForm').onsubmit = e => {
     try {
       const { result } = await call({ type: 'tab:submit', tabId, form });
       const rej = result?.rejected && (Array.isArray(result.rejected) ? result.rejected.length : Object.keys(result.rejected).length);
-      setMsg($('submitMsg'), `${result?.created ? 'Added to the hub' : 'Merged into the hub record'}.${rej ? ` ${rej} item(s) rejected: ${JSON.stringify(result.rejected).slice(0, 300)}` : ''}`, rej ? 'err' : 'ok');
+      const volNote = form.includeVolume && !result?.volume_included ? ' No on-chain volume was available to include.' : '';
+      setMsg($('submitMsg'), `${result?.created ? 'Added to the hub' : 'Merged into the hub record'}.${volNote}${rej ? ` ${rej} item(s) rejected: ${JSON.stringify(result.rejected).slice(0, 300)}` : ''}`, rej ? 'err' : 'ok');
       $('extraWallets').value = '';
       $('extraCheck').innerHTML = '';
       $('comment').value = '';
@@ -372,15 +398,19 @@ $('submitForm').onsubmit = e => {
   });
 };
 
+let lookupSeq = 0;
 $('lookupForm').onsubmit = e => {
   e.preventDefault();
   const q = $('lookupQ').value.trim();
   if (!q) return;
+  const seq = ++lookupSeq;
   $('lookupOut').textContent = 'Searching…';
-  call({ type: 'lookup', q }).then(({ result, wallet, invalid, volume }) => {
+  call({ type: 'lookup', q }).then(({ result, wallet, invalid, wantVolume }) => {
+    if (seq !== lookupSeq) return; // a newer search replaced this one
     const head = [];
     if (invalid) head.push(`<p class="err-text">${esc(invalid)}</p>`);
-    if (wallet) head.push(`<p><span class="ok-text">✓ ${esc(chainText(wallet))}</span> <span class="muted">${esc(wallet.format)}</span>${volumeHtml(volume)}</p>`);
+    // <div>s, not <p>/<span>: volumeHtml returns a <div>, which a <p> cannot contain.
+    if (wallet) head.push(`<div class="lookup-wallet"><span class="ok-text">✓ ${esc(chainText(wallet))}</span> <span class="muted">${esc(wallet.format)}</span><div id="lookupVol">${wantVolume ? volumeHtml({ loading: true }) : ''}</div></div>`);
     const groups = (Array.isArray(result) ? result : []).filter(g => g.results?.length);
     const body = groups.length
       ? groups.map(g => `<b>${esc(g.kind)}</b> · ${g.results.length} match(es)<ul class="wallets">${
@@ -393,7 +423,12 @@ $('lookupForm').onsubmit = e => {
         }).join('')}</ul>`).join('')
       : '<p class="muted">No match in the hub.</p>';
     $('lookupOut').innerHTML = head.join('') + body;
-  }, err => { $('lookupOut').textContent = friendly(err); });
+    if (wantVolume) {
+      call({ type: 'lookup:volume', q }).then(({ volume }) => {
+        if (seq === lookupSeq && $('lookupVol')) $('lookupVol').innerHTML = volumeHtml(volume) || '';
+      }, () => { if (seq === lookupSeq && $('lookupVol')) $('lookupVol').innerHTML = ''; });
+    }
+  }, err => { if (seq === lookupSeq) $('lookupOut').textContent = friendly(err); });
 };
 
 for (const el of document.querySelectorAll('[data-set]')) {
@@ -401,6 +436,7 @@ for (const el of document.querySelectorAll('[data-set]')) {
     const value = el.type === 'checkbox' ? el.checked : el.value;
     try {
       state.settings = (await call({ type: 'settings:save', settings: { [el.dataset.set]: value } })).settings;
+      syncVolumeOption();
       setMsg($('settingsMsg'), 'Saved. Applies to pages loaded from now on.', 'ok');
     } catch (e) { setMsg($('settingsMsg'), friendly(e), 'err'); }
   });

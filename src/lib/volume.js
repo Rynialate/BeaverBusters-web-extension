@@ -52,14 +52,22 @@ const HOST_GAP_MS = {
 const LIMIT_STATUS = { 'api.blockchair.com': [402, 430, 434, 435], 'api.trongrid.io': [403] };
 const nextSlot = new Map();
 const blockedUntil = new Map();
+let onBlock = null;
+
+// The background persists these windows so they survive the worker being stopped when idle.
+export function restoreBlocks(obj) {
+  for (const [host, until] of Object.entries(obj || {})) if (until > Date.now()) blockedUntil.set(host, Math.max(until, blockedUntil.get(host) || 0));
+}
+export function setBlockListener(fn) { onBlock = fn; }
 
 export class VolumeError extends Error {
-  constructor(code, message) { super(message); this.code = code; }
+  constructor(code, message, retryAt) { super(message); this.code = code; this.retryAt = retryAt; }
 }
 
 function checkBlocked(host) {
-  const blocked = (blockedUntil.get(host) || 0) - Date.now();
-  if (blocked > 0) throw new VolumeError('rate_limited', `${host} asked us to slow down; try again in ${Math.ceil(blocked / 1000)} s`);
+  const until = blockedUntil.get(host) || 0;
+  const blocked = until - Date.now();
+  if (blocked > 0) throw new VolumeError('rate_limited', `${host} asked us to slow down; try again in ${Math.ceil(blocked / 1000)} s`, until);
 }
 
 async function getJson(url, { method = 'GET', body, timeoutMs = 15000 } = {}) {
@@ -92,8 +100,10 @@ async function getJson(url, { method = 'GET', body, timeoutMs = 15000 } = {}) {
   if (res.status === 429 || LIMIT_STATUS[host]?.includes(res.status)) {
     const ra = res.headers.get('retry-after');
     const secs = Number(ra) || Math.max(0, (Date.parse(ra) - Date.now()) / 1000) || (host === 'api.blockcypher.com' ? 600 : 60);
-    blockedUntil.set(host, Date.now() + secs * 1000);
-    throw new VolumeError('rate_limited', `${host} rate limit reached`);
+    const until = Date.now() + secs * 1000;
+    blockedUntil.set(host, until);
+    try { onBlock?.(Object.fromEntries([...blockedUntil].filter(([, t]) => t > Date.now()))); } catch { /* best effort */ }
+    throw new VolumeError('rate_limited', `${host} rate limit reached`, until);
   }
   if (res.status === 404) return null;
   if (!res.ok) throw new VolumeError('http_' + res.status, `${host} answered HTTP ${res.status}`);
@@ -446,18 +456,22 @@ const ADAPTERS = {
 const EVM_CHAINS = ['eth', 'bsc', 'matic', 'arb', 'op', 'base']; // no keyless Avalanche source yet
 export const SUPPORTED = new Set([...Object.keys(ADAPTERS), ...EVM_CHAINS]);
 
-// One wallet -> { chain, address, networks: [result...], errors: [{network, code, message}], checked, at }.
-// A 0x address is checked on every supported EVM network; only networks with activity are kept.
-export async function walletVolume(chain, address) {
+const errorOf = (network, e) => ({ network, code: e?.code || 'error', message: e?.message || String(e), retryAt: e?.retryAt });
+
+// One wallet -> { chain, address, networks: [result...], errors: [{network, code, message, retryAt}], checked, at }.
+// A 0x address is checked on every supported EVM network (or only those named in `only`);
+// only networks with activity are kept.
+export async function walletVolume(chain, address, { only } = {}) {
   const at = new Date().toISOString();
   if (/^0x[0-9a-fA-F]{40}$/.test(address)) {
-    const settled = await Promise.allSettled(EVM_NETWORKS.map(n => n.run(address)));
+    const nets = only ? EVM_NETWORKS.filter(n => only.includes(n.network)) : EVM_NETWORKS;
+    const settled = await Promise.allSettled(nets.map(n => n.run(address)));
     const networks = [], errors = [];
     settled.forEach((s, i) => {
       if (s.status === 'fulfilled') { if (hasActivity(s.value)) networks.push(s.value); }
-      else errors.push({ network: EVM_NETWORKS[i].network, code: s.reason?.code || 'error', message: s.reason?.message || String(s.reason) });
+      else errors.push(errorOf(nets[i].network, s.reason));
     });
-    const checked = EVM_NETWORKS.filter((_, i) => settled[i].status === 'fulfilled').map(n => n.network);
+    const checked = nets.filter((_, i) => settled[i].status === 'fulfilled').map(n => n.network);
     return { chain, address, networks, errors, checked, at };
   }
   const adapter = Object.prototype.hasOwnProperty.call(ADAPTERS, chain) ? ADAPTERS[chain] : null;
@@ -466,7 +480,7 @@ export async function walletVolume(chain, address) {
     const r = await adapter(address);
     return { chain, address, networks: [r], errors: [], checked: [r.network], at };
   } catch (e) {
-    return { chain, address, networks: [], errors: [{ network: chain, code: e.code || 'error', message: e.message || String(e) }], checked: [], at };
+    return { chain, address, networks: [], errors: [errorOf(chain, e)], checked: [], at };
   }
 }
 

@@ -13,15 +13,16 @@
   const CANDIDATES = [
     /\b0x[a-fA-F0-9]{40}\b/g, // EVM
     /\b(?:bc1|BC1|ltc1|LTC1)[a-zA-Z0-9]{11,87}\b/g, // SegWit / Taproot
-    /\b(?:bitcoincash:)?[qp][02-9ac-hj-np-z]{41}\b/gi, // CashAddr
+    /\b(?:bitcoincash:)?[qp](?:[02-9ac-hj-np-z]{60}|[02-9ac-hj-np-z]{41})\b/gi, // CashAddr (P2PKH/P2SH, P2SH32)
     /\baddr1[02-9ac-hj-np-z]{50,120}\b/g, // Cardano
     /\bX-avax1[02-9ac-hj-np-z]{38}\b/gi, // Avalanche X-Chain
-    /(?<![A-Za-z0-9_+/-])[EU][Qf][A-Za-z0-9_+/-]{46}(?![A-Za-z0-9_+/-])/g, // TON (EQ/UQ basechain, Ef/Uf masterchain)
+    /(?<![A-Za-z0-9_+-])[EU][Qf][A-Za-z0-9_+/-]{46}(?![A-Za-z0-9_+-])/g, // TON (EQ/UQ basechain, Ef/Uf masterchain); '/' may border it, as in ton://transfer/<addr>
     new RegExp(`\\b[${B58}]{25,44}\\b`, 'g'), // Base58: BTC/LTC/DOGE/DASH/TRX legacy, XRP, Solana
   ];
 
   const ATTRS = ['value', 'data-clipboard-text', 'data-address', 'data-wallet', 'data-copy', 'data-text', 'data-value', 'title', 'aria-label', 'alt', 'placeholder'];
   const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG']);
+  const INLINE = new Set(['SPAN', 'B', 'I', 'EM', 'STRONG', 'A', 'CODE', 'MARK', 'SMALL', 'SUB', 'SUP', 'FONT', 'ABBR', 'KBD', 'SAMP', 'TT', 'U', 'S', 'WBR']);
   const MAX_TEXT = 1_500_000;
 
   // ---------- scanning ----------
@@ -42,6 +43,27 @@
       total += walker.currentNode.nodeValue.length;
     }
     out.push({ where: 'text', text: parts.join('\n') });
+
+    // An address split across inline elements (<span>, <wbr>, highlighting) or with soft hyphens /
+    // zero-width characters: join each block's inline text runs and scan that too.
+    const runs = [];
+    let run = '', block = null, joinedTotal = 0;
+    const blockOf = el => { let e = el; while (e && INLINE.has(e.tagName)) e = e.parentElement; return e; };
+    const all = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const p = n.parentElement;
+        return !p || SKIP_TAGS.has(p.tagName) || p.closest('#sb-ext-host') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    while (all.nextNode() && joinedTotal < MAX_TEXT) {
+      const n = all.currentNode;
+      const b = blockOf(n.parentElement);
+      if (b !== block) { if (run.length >= 25) runs.push(run); run = ''; block = b; }
+      run += n.nodeValue;
+      joinedTotal += n.nodeValue.length;
+    }
+    if (run.length >= 25) runs.push(run);
+    out.push({ where: 'text', text: runs.map(r => r.replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/g, '')).join('\n') });
 
     const vals = [];
     for (const el of document.querySelectorAll('input, textarea')) if (el.value && el.value.length >= 25) vals.push(el.value);
@@ -88,7 +110,7 @@
           const raw = m[0];
           if (tried.has(raw)) continue;
           tried.add(raw);
-          const c = W.checkDetected(raw);
+          const c = W.checkDetected(raw) || (/^[qp][02-9ac-hj-np-z]{60}$/i.test(raw) ? W.checkDetected('bitcoincash:' + raw) : null);
           if (!c || found.has(c.key)) continue;
           if ([...found.values()].some(f => f.raw.includes(raw))) continue; // a fragment of a longer address
           found.set(c.key, { address: W.hubAddress(c), raw, chain: c.chain, format: c.format, checksum: c.checksum, confidence: confidenceOf(c), where });
@@ -110,6 +132,13 @@
   let lastHref = location.href;
   let scans = 0;
   let enabled = false;
+
+  // Take the background's wallet list, keeping on-chain figures already shown for the same address.
+  function adoptWallets(list) {
+    if (!list) return;
+    const shown = new Map(wallets.map(w => [w.address, w.volume]));
+    wallets = list.map(w => (w.volume || !shown.get(w.address) ? w : { ...w, volume: shown.get(w.address) }));
+  }
 
   async function send(msg) {
     try { return await ext.runtime.sendMessage(msg); } catch { return null; }
@@ -140,7 +169,7 @@
       fresh.forEach(w => sent.add(w.address));
       const res = await send({ type: 'page:wallets', wallets: forced ? found : fresh, forced });
       if (res && !res.error) {
-        wallets = res.wallets || wallets;
+        adoptWallets(res.wallets);
         effective = res.effective;
         check = res.check;
         autoSubmitted = res.autoSubmitted || autoSubmitted;
@@ -168,7 +197,7 @@
       if (!fresh.length) return;
       fresh.forEach(w => sent.add(w.address));
       send({ type: 'page:wallets', wallets: fresh }).then(res => {
-        if (res && !res.error) { wallets = res.wallets || wallets; render(); }
+        if (res && !res.error) { adoptWallets(res.wallets); render(); }
       });
     });
   }, true);
@@ -245,8 +274,8 @@
     const v = w.volume;
     let flow = '';
     if (v?.usdReceived) flow = `<span class="tag flow" title="Lifetime received, at today's prices${v.usdPartial ? ' (at least)' : ''}">≈ ${esc(fmtUsd(v.usdReceived))}${v.usdPartial ? '+' : ''} in</span>`;
-    else if (v && !v.networks?.length && v.checked?.length) flow = `<span class="tag neutral">no on-chain activity</span>`;
-    const chain = W.EVM_CHAINS.includes(w.chain) ? 'evm' : w.chain;
+    else if (v && !v.placeholder && !v.networks?.length && v.checked?.length && !v.errors?.length) flow = `<span class="tag neutral">no on-chain activity</span>`;
+    const chain = /^0x/i.test(w.address) ? 'evm' : w.chain;
     return `<li>${tags}${flow}<span class="muted">${esc(chain)}${w.confidence !== 'high' ? ' (no checksum)' : ''}</span><br><code>${esc(w.address)}</code></li>`;
   }
 
