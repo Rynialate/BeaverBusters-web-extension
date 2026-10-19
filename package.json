@@ -7,6 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "build:chrome": "node build.mjs chrome",
-    "build:firefox": "node build.mjs firefox"
+    "build:firefox": "node build.mjs firefox",
+    "test": "node --test tests/*.mjs"
   }
 }

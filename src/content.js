@@ -5,61 +5,25 @@
   window.__sbExtLoaded = true;
 
   const ext = globalThis.browser ?? globalThis.chrome;
+  const W = globalThis.BBWallets; // lib/wallets.js, injected just before this script
   const B58 = '1-9A-HJ-NP-Za-km-z';
-  const B32 = '02-9ac-hj-np-z';
 
-  // Candidate shapes. The hub re-checks every address per chain on write, so these only need
-  // to find candidates; `check` upgrades base58check-valid ones to high confidence.
-  const PATTERNS = [
-    { guess: 'eth/evm', re: /\b0x[a-fA-F0-9]{40}\b/g, confidence: 'high' },
-    { guess: 'btc', re: new RegExp(`\\bbc1[${B32}]{11,71}\\b`, 'gi'), confidence: 'high' },
-    { guess: 'ltc', re: new RegExp(`\\bltc1[${B32}]{11,71}\\b`, 'gi'), confidence: 'high' },
-    { guess: 'bch', re: new RegExp(`\\b(?:bitcoincash:)?[qp][${B32}]{41}\\b`, 'g'), confidence: 'high', strip: /^bitcoincash:/ },
-    { guess: 'ada', re: new RegExp(`\\baddr1[${B32}]{50,110}\\b`, 'g'), confidence: 'high' },
-    { guess: 'ton', re: /\b(?:EQ|UQ)[A-Za-z0-9_-]{46}(?![A-Za-z0-9_-])/g, confidence: 'high' },
-    { guess: 'trx', re: new RegExp(`\\bT[${B58}]{33}\\b`, 'g'), confidence: 'medium', check: true },
-    { guess: 'btc', re: new RegExp(`\\b[13][${B58}]{25,34}\\b`, 'g'), confidence: 'medium', check: true },
-    { guess: 'ltc', re: new RegExp(`\\b[LM][${B58}]{26,33}\\b`, 'g'), confidence: 'medium', check: true },
-    { guess: 'doge', re: new RegExp(`\\bD[5-9A-HJ-NP-U][${B58}]{32}\\b`, 'g'), confidence: 'medium', check: true },
-    { guess: 'dash', re: new RegExp(`\\bX[${B58}]{33}\\b`, 'g'), confidence: 'medium', check: true },
-    { guess: 'xrp', re: /\br[1-9A-HJ-NP-Za-km-z]{24,34}\b/g, confidence: 'medium' },
-    { guess: 'sol', re: new RegExp(`\\b[${B58}]{32,44}\\b`, 'g'), confidence: 'low', sol: true },
+  // Candidate shapes only. Every candidate must then pass lib/wallets.js for its detected chain
+  // (decode, checksum, version byte / prefix), so anything reported is a structurally real address.
+  const CANDIDATES = [
+    /\b0x[a-fA-F0-9]{40}\b/g, // EVM
+    /\b(?:bc1|BC1|ltc1|LTC1)[a-zA-Z0-9]{11,87}\b/g, // SegWit / Taproot
+    /\b(?:bitcoincash:)?[qp](?:[02-9ac-hj-np-z]{60}|[02-9ac-hj-np-z]{41})\b/gi, // CashAddr (P2PKH/P2SH, P2SH32)
+    /\baddr1[02-9ac-hj-np-z]{50,120}\b/g, // Cardano
+    /\bX-avax1[02-9ac-hj-np-z]{38}\b/gi, // Avalanche X-Chain
+    /(?<![A-Za-z0-9_+-])[EU][Qf][A-Za-z0-9_+/-]{46}(?![A-Za-z0-9_+-])/g, // TON (EQ/UQ basechain, Ef/Uf masterchain); '/' may border it, as in ton://transfer/<addr>
+    new RegExp(`\\b[${B58}]{25,44}\\b`, 'g'), // Base58: BTC/LTC/DOGE/DASH/TRX legacy, XRP, Solana
   ];
 
   const ATTRS = ['value', 'data-clipboard-text', 'data-address', 'data-wallet', 'data-copy', 'data-text', 'data-value', 'title', 'aria-label', 'alt', 'placeholder'];
   const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG']);
+  const INLINE = new Set(['SPAN', 'B', 'I', 'EM', 'STRONG', 'A', 'CODE', 'MARK', 'SMALL', 'SUB', 'SUP', 'FONT', 'ABBR', 'KBD', 'SAMP', 'TT', 'U', 'S', 'WBR']);
   const MAX_TEXT = 1_500_000;
-
-  // ---------- base58check (BTC/LTC/DOGE/DASH/TRX legacy addresses) ----------
-
-  const ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-  function b58decode(s) {
-    const bytes = [0];
-    for (const ch of s) {
-      let carry = ALPHA.indexOf(ch);
-      if (carry < 0) return null;
-      for (let i = 0; i < bytes.length; i++) {
-        carry += bytes[i] * 58;
-        bytes[i] = carry & 0xff;
-        carry >>= 8;
-      }
-      while (carry) { bytes.push(carry & 0xff); carry >>= 8; }
-    }
-    for (const ch of s) { if (ch === '1') bytes.push(0); else break; }
-    return new Uint8Array(bytes.reverse());
-  }
-  async function b58checkOk(s) {
-    const raw = b58decode(s);
-    if (!raw || raw.length < 5) return false;
-    const payload = raw.slice(0, -4);
-    const h1 = await crypto.subtle.digest('SHA-256', payload);
-    const h2 = new Uint8Array(await crypto.subtle.digest('SHA-256', h1));
-    return raw.slice(-4).every((b, i) => b === h2[i]);
-  }
-
-  function looksLikeSol(s) {
-    return /\d/.test(s) && /[A-Z]/.test(s) && /[a-z]/.test(s) && !/^[0-9a-fA-F]+$/.test(s);
-  }
 
   // ---------- scanning ----------
 
@@ -79,6 +43,27 @@
       total += walker.currentNode.nodeValue.length;
     }
     out.push({ where: 'text', text: parts.join('\n') });
+
+    // An address split across inline elements (<span>, <wbr>, highlighting) or with soft hyphens /
+    // zero-width characters: join each block's inline text runs and scan that too.
+    const runs = [];
+    let run = '', block = null, joinedTotal = 0;
+    const blockOf = el => { let e = el; while (e && INLINE.has(e.tagName)) e = e.parentElement; return e; };
+    const all = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const p = n.parentElement;
+        return !p || SKIP_TAGS.has(p.tagName) || p.closest('#sb-ext-host') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    while (all.nextNode() && joinedTotal < MAX_TEXT) {
+      const n = all.currentNode;
+      const b = blockOf(n.parentElement);
+      if (b !== block) { if (run.length >= 25) runs.push(run); run = ''; block = b; }
+      run += n.nodeValue;
+      joinedTotal += n.nodeValue.length;
+    }
+    if (run.length >= 25) runs.push(run);
+    out.push({ where: 'text', text: runs.map(r => r.replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/g, '')).join('\n') });
 
     const vals = [];
     for (const el of document.querySelectorAll('input, textarea')) if (el.value && el.value.length >= 25) vals.push(el.value);
@@ -110,25 +95,25 @@
     return out;
   }
 
+  // Checksum-verified addresses, and EVM ones without checksum casing, are confident enough to
+  // pre-select for submission; Solana keys have no checksum at all.
+  const confidenceOf = c => (c.checksum || W.EVM_CHAINS.includes(c.chain) ? 'high' : 'low');
+
   async function extract(sources) {
-    const found = new Map();
-    const failed = new Set(); // right shape for a checksummed chain but a bad checksum: not an address
+    const found = new Map(); // validated key (chain:address) -> wallet
+    const tried = new Set();
     for (const { where, text } of sources) {
       if (!text) continue;
-      for (const p of PATTERNS) {
-        p.re.lastIndex = 0;
-        for (const m of text.matchAll(p.re)) {
-          let addr = m[0];
-          if (p.strip) addr = addr.replace(p.strip, '');
-          if (p.guess === 'bch') addr = addr.toLowerCase();
-          if (found.has(addr) || failed.has(addr) || [...found.keys()].some(k => k.includes(addr))) continue;
-          if (p.sol && !looksLikeSol(addr)) continue;
-          let confidence = p.confidence;
-          if (p.check) {
-            if (!(await b58checkOk(addr))) { failed.add(addr); continue; }
-            confidence = 'high';
-          }
-          found.set(addr, { address: addr, guess: p.guess, confidence, where });
+      for (const re of CANDIDATES) {
+        re.lastIndex = 0;
+        for (const m of text.matchAll(re)) {
+          const raw = m[0];
+          if (tried.has(raw)) continue;
+          tried.add(raw);
+          const c = W.checkDetected(raw) || (/^[qp][02-9ac-hj-np-z]{60}$/i.test(raw) ? W.checkDetected('bitcoincash:' + raw) : null);
+          if (!c || found.has(c.key)) continue;
+          if ([...found.values()].some(f => f.raw.includes(raw))) continue; // a fragment of a longer address
+          found.set(c.key, { address: W.hubAddress(c), raw, chain: c.chain, format: c.format, checksum: c.checksum, confidence: confidenceOf(c), where });
           if (found.size >= 200) return [...found.values()];
         }
       }
@@ -147,6 +132,13 @@
   let lastHref = location.href;
   let scans = 0;
   let enabled = false;
+
+  // Take the background's wallet list, keeping on-chain figures already shown for the same address.
+  function adoptWallets(list) {
+    if (!list) return;
+    const shown = new Map(wallets.map(w => [w.address, w.volume]));
+    wallets = list.map(w => (w.volume || !shown.get(w.address) ? w : { ...w, volume: shown.get(w.address) }));
+  }
 
   async function send(msg) {
     try { return await ext.runtime.sendMessage(msg); } catch { return null; }
@@ -177,7 +169,7 @@
       fresh.forEach(w => sent.add(w.address));
       const res = await send({ type: 'page:wallets', wallets: forced ? found : fresh, forced });
       if (res && !res.error) {
-        wallets = res.wallets || wallets;
+        adoptWallets(res.wallets);
         effective = res.effective;
         check = res.check;
         autoSubmitted = res.autoSubmitted || autoSubmitted;
@@ -205,7 +197,7 @@
       if (!fresh.length) return;
       fresh.forEach(w => sent.add(w.address));
       send({ type: 'page:wallets', wallets: fresh }).then(res => {
-        if (res && !res.error) { wallets = res.wallets || wallets; render(); }
+        if (res && !res.error) { adoptWallets(res.wallets); render(); }
       });
     });
   }, true);
@@ -215,6 +207,13 @@
     if (msg?.type === 'page:html') {
       const dt = document.doctype ? `<!DOCTYPE ${document.doctype.name}>` : '';
       sendResponse({ html: dt + document.documentElement.outerHTML });
+      return false;
+    }
+    if (msg?.type === 'page:volumes') {
+      // On-chain figures arrive after the hub lookups; merge them in by address.
+      const vols = msg.volumes || {};
+      wallets = wallets.map(w => (vols[w.address] ? { ...w, volume: vols[w.address] } : w));
+      render();
       return false;
     }
     if (msg?.type === 'page:rescan') {
@@ -241,7 +240,7 @@
              box-shadow: 0 4px 18px rgba(0,0,0,.28); border: 1px solid #dfe6e9; }
     .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: #fff; position: sticky; top: 0; }
     .head b { flex: 1; font-size: 13px; }
-    .head button { background: rgba(255,255,255,.2); color: #fff; border: 0; border-radius: 4px; width: 22px; height: 22px; cursor: pointer; font-size: 13px; line-height: 1; }
+    .head button { background: rgba(0,0,0,.18); color: #fff; border: 0; border-radius: 4px; width: 22px; height: 22px; cursor: pointer; font-size: 13px; line-height: 1; }
     .body { padding: 8px 10px; }
     .row { margin: 0 0 6px; }
     .muted { color: #636e72; }
@@ -249,8 +248,8 @@
     li { padding: 5px 0; border-top: 1px solid #f1f2f6; }
     code { font: 10.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
     .tag { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 4px; color: #fff; }
-    .scam { background: #d63031; } .suspected { background: #e17055; } .not_scam { background: #00b894; }
-    .neutral { background: #636e72; } .info { background: #0984e3; }
+    .scam { background: #d52a2b; } .suspected { background: #b45309; } .not_scam { background: #007e65; }
+    .neutral { background: #636e72; } .info { background: #0871c3; } .flow { background: #4a5568; }
     @media (prefers-color-scheme: dark) {
       .panel { background: #1e272e; color: #dfe6e9; border-color: #2d3436; }
       li { border-color: #2d3436; } .muted { color: #b2bec3; }
@@ -272,7 +271,18 @@
       if (r.submitted) tags += `<span class="tag suspected">submitted</span>`;
       if (r.excluded) tags += `<span class="tag neutral">excluded</span>`;
     }
-    return `<li>${tags}<span class="muted">${esc(w.guess)}${w.confidence !== 'high' ? ' ?' : ''}</span><br><code>${esc(w.address)}</code></li>`;
+    const v = w.volume;
+    let flow = '';
+    if (v?.usdReceived) flow = `<span class="tag flow" title="Lifetime received, at today's prices${v.usdPartial ? ' (at least)' : ''}">≈ ${esc(fmtUsd(v.usdReceived))}${v.usdPartial ? '+' : ''} in</span>`;
+    else if (v && !v.placeholder && !v.networks?.length && v.checked?.length && !v.errors?.length) flow = `<span class="tag neutral">no on-chain activity</span>`;
+    const chain = /^0x/i.test(w.address) ? 'evm' : w.chain;
+    return `<li>${tags}${flow}<span class="muted">${esc(chain)}${w.confidence !== 'high' ? ' (no checksum)' : ''}</span><br><code>${esc(w.address)}</code></li>`;
+  }
+
+  function fmtUsd(n) {
+    if (n >= 1e6) return '$' + (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+    if (n >= 1e3) return '$' + (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k';
+    return '$' + Math.round(n);
   }
 
   function render() {
@@ -288,7 +298,7 @@
     }
     host.style.display = '';
     const v = effective?.verdict || 'not_in_hub';
-    const color = { scam: '#d63031', suspected: '#e17055', not_scam: '#00b894', not_in_hub: '#0984e3' }[v] || '#636e72';
+    const color = { scam: '#d52a2b', suspected: '#b45309', not_scam: '#007e65', not_in_hub: '#0871c3' }[v] || '#636e72';
     const label = VERDICT_LABEL[v] || v;
 
     if (collapsed) {
