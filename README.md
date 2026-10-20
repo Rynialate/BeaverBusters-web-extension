@@ -36,13 +36,19 @@ Optional automation (off by default, in **Settings**):
 
 ## Install
 
+The `src` folder is a working extension in both browsers, so no build step is needed:
+
+- **Chrome / Edge / Brave:** go to `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and pick the `src` folder.
+- **Firefox (128+):** go to `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on**, and pick `src/manifest.json`.
+
+For packages without cross-browser manifest warnings, or to publish, build them:
+
 ```sh
 node build.mjs          # builds dist/chrome, dist/firefox and a .zip of each
 ```
 
-- **Chrome / Edge / Brave:** go to `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and pick `dist/chrome`.
-- **Firefox (128+):** go to `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on**, and pick `dist/firefox/manifest.json`.
-  For a permanent install, sign `dist/beaverbusters-checker-firefox-*.zip` through addons.mozilla.org (it can be unlisted).
+Then load `dist/chrome` or `dist/firefox/manifest.json` the same way. For a permanent Firefox
+install, sign `dist/beaverbusters-checker-firefox-*.zip` through addons.mozilla.org (it can be unlisted).
 
 Then click the toolbar icon (badge `KEY`), paste your hub API key, and press **Verify and save**.
 
