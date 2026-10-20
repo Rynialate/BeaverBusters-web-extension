@@ -1,5 +1,9 @@
 // Builds browser-specific packages from src/: dist/chrome, dist/firefox and a .zip of each.
 // Usage: node build.mjs            (both)    node build.mjs firefox   (one)
+//
+// src/ is itself loadable in both browsers: its manifest declares the background both ways
+// (Chrome uses service_worker, Firefox uses scripts, each ignores the other). The packages
+// built here keep only the keys each browser understands, so they load without warnings.
 import { cpSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
@@ -10,7 +14,7 @@ const base = JSON.parse(readFileSync(join(root, 'src/manifest.json'), 'utf8'));
 const targets = process.argv.slice(2).length ? process.argv.slice(2) : ['chrome', 'firefox'];
 
 const perBrowser = {
-  chrome: m => ({
+  chrome: ({ browser_specific_settings, ...m }) => ({
     ...m,
     background: { service_worker: 'background.js', type: 'module' },
     minimum_chrome_version: '116',

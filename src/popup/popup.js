@@ -22,6 +22,9 @@ function setMsg(el, text, kind = '') {
 
 function friendly(e) {
   if (e.code === 'no_host_access') return e.message;
+  if (/Receiving end does not exist|Could not establish connection/i.test(e.message || '')) {
+    return "The extension's background part is not running, so nothing reached the hub. Reload the extension (chrome://extensions or about:debugging) and try again.";
+  }
   if (e.status === 401 || e.code === 'unauthorized') return 'The hub refused the key: ' + e.message;
   if (e.status === 403) return 'Your key is not allowed to do that: ' + e.message;
   if (e.status === 429) return 'Rate limit reached; try again shortly.';
