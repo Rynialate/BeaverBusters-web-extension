@@ -199,6 +199,13 @@ async function flushBlockchainCom() {
       const touched = [...(tx.inputs || []).map(i => i.prev_out?.addr), ...(tx.out || []).map(o => o.addr)].filter(Boolean);
       for (const a of addrs) if (!lastSeen.has(a) && touched.some(t => same(a, t))) lastSeen.set(a, tx.time);
     }
+    // The shared transaction list can be filled by one busy address; look the others up one by one.
+    const gaps = addrs.filter(a => !lastSeen.has(a) && num(rows.find(r => same(a, r.address))?.n_tx) > 0);
+    await Promise.all(gaps.map(async a => {
+      const txs = await getJson(`https://mempool.space/api/address/${a}/txs`).catch(() => null);
+      const t = Array.isArray(txs) && txs[0];
+      if (t) lastSeen.set(a, t.status?.confirmed ? t.status.block_time : Date.now() / 1000);
+    }));
     for (const b of batch) {
       const a = rows.find(r => same(b.address, r.address));
       if (!a) { b.reject(new VolumeError('no_data', 'blockchain.com returned no data for this address')); continue; }
@@ -219,12 +226,17 @@ async function flushBlockchainCom() {
 async function blockchainComBch(address) {
   const cash = address.startsWith('bitcoincash:') ? address : 'bitcoincash:' + address;
   const j = await getJson(`https://api.blockchain.info/haskoin-store/bch/address/${encodeURIComponent(cash)}/balance`);
-  if (!j || j.received === undefined) throw new VolumeError('no_data', 'blockchain.com returned no data for this address');
+  if (!j || num(j.received) === null) throw new VolumeError('no_data', 'blockchain.com returned no data for this address');
   const balance = (num(j.confirmed) || 0) + (num(j.unconfirmed) || 0);
+  let lastActivity = null;
+  if (num(j.txs) > 0) {
+    const t = await getJson(`https://api.blockchain.info/haskoin-store/bch/address/${encodeURIComponent(cash)}/transactions/full?limit=1`).catch(() => null);
+    if (Array.isArray(t) && t[0]) lastActivity = iso(t[0].time);
+  }
   return result({
     network: 'Bitcoin Cash', asset: 'BCH',
     received: units(j.received, 8), sent: units(Math.max(0, num(j.received) - balance), 8), balance: units(balance, 8),
-    txCount: num(j.txs),
+    txCount: num(j.txs), lastActivity,
     source: 'blockchain.com', explorer: `https://www.blockchain.com/explorer/addresses/bch/${cash.replace(/^bitcoincash:/, '')}`, note: GROSS_NOTE,
   });
 }
@@ -392,8 +404,9 @@ async function tronscanWalk(url, address, fromKey, toKey, pick) {
     }
     const list = Array.isArray(j.token_transfers) ? j.token_transfers : j.data;
     for (const t of list) {
-      const key = t.transaction_id || t.transactionHash || t.hash;
-      if (key) { if (seen.has(key)) continue; seen.add(key); }
+      const id = t.transaction_id || t.transactionHash || t.hash;
+      const key = `${id}|${t[fromKey]}|${t[toKey]}|${t.quant ?? t.amount}`;
+      if (id) { if (seen.has(key)) continue; seen.add(key); }
       if (t.revert || (t.finalResult && t.finalResult !== 'SUCCESS') || (t.contractRet && t.contractRet !== 'SUCCESS')) continue;
       const amount = pick(t);
       if (amount === null) continue;
@@ -441,6 +454,7 @@ async function tronViaTronscan(address) {
   const trxOk = !trx.failed;
   const usdtRow = (acct.trc20token_balances || []).find(t => t.tokenId === USDT_TRC20);
   const notes = [`TRX and USDT-TRC20 totals are summed from transfers (Tronscan${usdtSource !== 'tronscan.org' ? '; USDT from TronGrid' : ''}).`];
+  if (!num(acct.date_created)) notes.unshift('Not activated (no TRX yet).');
   if (!trxOk) notes.push('TRX transfers could not be loaded; only the TRX balance is shown.');
   if (num(acct.transactions_in) !== null || num(acct.transactions_out) !== null) notes.push(`Transactions in/out: ${num(acct.transactions_in) ?? '?'} / ${num(acct.transactions_out) ?? '?'}.`);
   if (usdt.unavailable) notes.push('USDT transfers could not be loaded from Tronscan or TronGrid; USDT totals are unavailable.');
