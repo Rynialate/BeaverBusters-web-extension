@@ -80,7 +80,7 @@ export async function request(key, method, path, { query, body, timeoutMs = 2000
   } catch (e) {
     if (e.name === 'AbortError') throw new ApiError(0, 'timeout', 'The hub did not answer in time');
     if (e instanceof ApiError) throw e;
-    throw new ApiError(0, 'network', e.message || 'Network error');
+    throw new ApiError(0, 'network', `Could not reach sdb.netherportal3.com (${e.message || 'network error'})`);
   } finally {
     clearTimeout(timer);
     release();

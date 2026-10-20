@@ -62,3 +62,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 11px; margin: 4p
 .ok-text { color: var(--ok-text); } .err-text { color: var(--err-text); }
 #extraCheck { margin-top: 4px; line-height: 1.5; }
 .lookup-wallet { margin: 0 0 8px; }
+.access { margin: 10px 12px 0; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--soft); font-size: 12px; }
+.access p { margin: 0 0 8px; }
+.access.warn { border-color: var(--accent); }
+.access button { width: 100%; font-weight: 600; }

@@ -2,6 +2,11 @@
 
 export const ext = globalThis.browser ?? globalThis.chrome;
 
+// The hub does not answer browser CORS checks, so the extension can only reach it with host access
+// to it. Chrome grants that at install unless site access is restricted; Firefox may need it granted.
+export const HUB_ORIGIN = 'https://sdb.netherportal3.com/*';
+export const ACCESS_ORIGINS = [HUB_ORIGIN, '<all_urls>']; // the hub, plus pages for wallet scanning
+
 export const DEFAULT_SETTINGS = {
   autoCheck: true,          // check every visited domain against the hub
   walletScan: true,         // find wallet addresses on pages and check them
