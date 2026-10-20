@@ -273,11 +273,16 @@
     }
     const v = w.volume;
     let flow = '';
-    if (v?.usdReceived) flow = `<span class="tag flow" title="Lifetime received, at today's prices${v.usdPartial ? ' (at least)' : ''}">≈ ${esc(fmtUsd(v.usdReceived))}${v.usdPartial ? '+' : ''} in</span>`;
+    const lower = v?.usdPartial || v?.usdMissing?.length; // capped history, or a coin without a price
+    const native = v?.networks?.find(n => n.received > 0);
+    if (v?.usdReceived) flow = `<span class="tag flow" title="Lifetime received, at today's prices${lower ? ' (at least)' : ''}">≈ ${esc(fmtUsd(v.usdReceived))}${lower ? '+' : ''} in</span>`;
+    else if (native) flow = `<span class="tag flow" title="Lifetime received (no USD price available)">${esc(fmtCoin(native.received))} ${esc(native.asset)}${v.usdPartial ? '+' : ''} in</span>`;
     else if (v && !v.placeholder && !v.networks?.length && v.checked?.length && !v.errors?.length) flow = `<span class="tag neutral">no on-chain activity</span>`;
     const chain = /^0x/i.test(w.address) ? 'evm' : w.chain;
     return `<li>${tags}${flow}<span class="muted">${esc(chain)}${w.confidence !== 'high' ? ' (no checksum)' : ''}</span><br><code>${esc(w.address)}</code></li>`;
   }
+
+  const fmtCoin = n => (n >= 1000 ? Math.round(n).toLocaleString() : Number(n.toPrecision(3)).toString());
 
   function fmtUsd(n) {
     if (n >= 1e6) return '$' + (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';

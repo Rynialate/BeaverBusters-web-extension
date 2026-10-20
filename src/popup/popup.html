@@ -128,7 +128,10 @@
           <option value="auto">Automatically on every page with wallets</option>
           <option value="off">Off</option>
         </select>
-        <p class="muted small">Looks up each wallet on public block explorers (mempool.space, TronGrid, Ethplorer and others), which sends them the address.</p>
+        <p class="muted small">Looks up each wallet on public block explorers (blockchain.com, Tronscan, mempool.space, TronGrid, Ethplorer and others), which sends them the address.</p>
+        <label for="tronscanKey">Tronscan API key (optional)</label>
+        <input id="tronscanKey" type="password" data-set="tronscanKey" autocomplete="off" spellcheck="false" placeholder="Leave empty to use Tronscan without a key">
+        <p class="muted small">Tronscan may limit requests without a key; TronGrid is used if it refuses. Kept in this browser, sent only to Tronscan.</p>
         <label for="ignoreList">Ignored sites (one per line)</label>
         <textarea id="ignoreList" rows="4" spellcheck="false"></textarea>
         <button id="saveIgnore">Save ignored sites</button>

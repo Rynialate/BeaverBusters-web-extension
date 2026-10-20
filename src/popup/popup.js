@@ -203,7 +203,14 @@ function volumeHtml(v) {
   if (!v) return '';
   if (v.loading) return `<div class="vol muted">Checking on-chain activity…</div>`;
   const out = [];
-  if (v.usdReceived) out.push(`<b>≈ ${esc(fmtUsd(v.usdReceived))}${v.usdPartial ? '+' : ''} received</b> <span class="muted">(at today's prices${v.usdPartial ? '; at least this much' : ''})</span>`);
+  if (v.usdReceived || v.usdSent) {
+    const plus = v.usdPartial || v.usdMissing?.length ? '+' : '';
+    const parts = [v.usdReceived ? `${fmtUsd(v.usdReceived)}${plus} in` : null, v.usdSent ? `${fmtUsd(v.usdSent)}${plus} moved out` : null].filter(Boolean);
+    const missing = v.usdMissing?.length ? `; ${v.usdMissing.join(', ')} not priced` : '';
+    out.push(`<b>≈ ${esc(parts.join(' · '))}</b> <span class="muted">(at today's prices${v.usdPartial ? '; at least this much' : ''}${esc(missing)})</span>`);
+  } else if (v.usdMissing?.length) {
+    out.push(`<span class="muted">No USD estimate: prices for ${esc(v.usdMissing.join(', '))} could not be loaded.</span>`);
+  }
   for (const n of v.networks) {
     const bits = [];
     if (n.received !== null) bits.push(`in ${fmtAmount(n.received)} ${n.asset}`);

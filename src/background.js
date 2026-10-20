@@ -3,7 +3,7 @@
 
 import { hub, limits, ApiError, CLIENT_SOURCE } from './lib/api.js';
 import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES, HUB_ORIGIN } from './lib/settings.js';
-import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, SUPPORTED as VOLUME_CHAINS } from './lib/volume.js';
+import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, setTronscanKey, SUPPORTED as VOLUME_CHAINS } from './lib/volume.js';
 import './lib/wallets.js';
 
 const W = globalThis.BBWallets;
@@ -256,7 +256,13 @@ function volumeStale(v) {
 }
 
 async function priced(vol) {
-  try { addUsd(vol, await prices(vol.networks.map(n => n.asset))); } catch { vol.usdReceived = null; vol.pricesAt = null; } // the USD estimate is optional
+  try {
+    addUsd(vol, await prices(vol.networks.map(n => n.asset)));
+  } catch {
+    // No prices (e.g. CoinGecko unreachable): stablecoins still count at $1; retry prices later.
+    addUsd(vol, {});
+    vol.pricesAt = null;
+  }
   return vol;
 }
 
@@ -275,6 +281,7 @@ async function volumeFor(w) {
     }
   }
   return once(ck, async () => {
+    setTronscanKey((await getConfig()).settings.tronscanKey);
     let vol;
     // A 0x wallet where only some networks failed: re-check just those and keep the rest.
     const failed = v?.data?.errors?.length && v.data.checked?.length && /^0x/i.test(w.address) ? v.data.errors.map(e => e.network) : null;
@@ -303,10 +310,16 @@ async function volumesForTab(tabId) {
   const vols = {};
   for (const w of all) if (!VOLUME_CHAINS.has(w.chain)) vols[w.address] = placeholderVolume(w, 'unsupported');
   for (const w of supported.slice(MAX_VOLUME_WALLETS)) vols[w.address] = placeholderVolume(w, 'skipped');
-  const queue = supported.slice(0, MAX_VOLUME_WALLETS);
-  await Promise.all([0, 1, 2].map(async () => {
-    for (let w = queue.shift(); w; w = queue.shift()) vols[w.address] = await volumeFor(w);
-  }));
+  const todo = supported.slice(0, MAX_VOLUME_WALLETS);
+  // Bitcoin wallets all start at once: blockchain.com answers them in one batched request.
+  const btc = todo.filter(w => w.chain === 'btc');
+  const queue = todo.filter(w => w.chain !== 'btc');
+  await Promise.all([
+    ...btc.map(async w => { vols[w.address] = await volumeFor(w); }),
+    ...[0, 1, 2].map(async () => {
+      for (let w = queue.shift(); w; w = queue.shift()) vols[w.address] = await volumeFor(w);
+    }),
+  ]);
   // Apply to the current state, unless the tab has moved on to another page meanwhile.
   const now = await updateTab(tabId, cur => (cur && cur.url === url
     ? { ...cur, wallets: (cur.wallets || []).map(w => (vols[w.address] ? { ...w, volume: vols[w.address] } : w)) }
@@ -467,6 +480,7 @@ function volumeReport(vols, now) {
     chain: v.chain,
     checked_networks: v.checked,
     usd_received: v.usdReceived === null || v.usdReceived === undefined ? null : Math.round(v.usdReceived),
+    usd_sent: v.usdSent === null || v.usdSent === undefined ? null : Math.round(v.usdSent),
     usd_partial: !!v.usdPartial,
     errors: v.errors.map(e => ({ network: e.network, code: e.code })),
     networks: v.networks.map(n => ({
