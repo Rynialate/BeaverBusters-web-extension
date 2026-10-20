@@ -24,6 +24,7 @@
     "scripting"
   ],
   "host_permissions": [
+    "https://sdb.netherportal3.com/*",
     "<all_urls>"
   ],
   "content_scripts": [

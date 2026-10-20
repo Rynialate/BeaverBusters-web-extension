@@ -1,4 +1,4 @@
-import { ext, REASON_CODES } from '../lib/settings.js';
+import { ext, REASON_CODES, HUB_ORIGIN, ACCESS_ORIGINS } from '../lib/settings.js';
 import '../lib/wallets.js';
 
 const W = globalThis.BBWallets;
@@ -21,6 +21,7 @@ function setMsg(el, text, kind = '') {
 }
 
 function friendly(e) {
+  if (e.code === 'no_host_access') return e.message;
   if (e.status === 401 || e.code === 'unauthorized') return 'The hub refused the key: ' + e.message;
   if (e.status === 403) return 'Your key is not allowed to do that: ' + e.message;
   if (e.status === 429) return 'Rate limit reached; try again shortly.';
@@ -32,22 +33,55 @@ async function busy(btn, fn) {
   try { return await fn(); } finally { btn.disabled = false; }
 }
 
+// ---------- site access ----------
+
+async function checkAccess() {
+  let hub = true, sites = true;
+  try {
+    hub = await ext.permissions.contains({ origins: [HUB_ORIGIN] });
+    sites = await ext.permissions.contains({ origins: ['<all_urls>'] });
+  } catch { /* no permissions API: nothing to ask for */ }
+  const banner = $('accessBanner');
+  if (hub && sites) { banner.hidden = true; return { hub, sites }; }
+  $('accessText').textContent = !hub
+    ? 'The browser has not given BeaverBusters access to sdb.netherportal3.com, so it cannot check your key or any site. Allow access, then accept the browser\'s prompt.'
+    : 'Page scanning is off: the browser has not given BeaverBusters access to websites. Allow access to find wallets on pages.';
+  banner.classList.toggle('warn', !hub);
+  const view = [$('keyView'), $('mainView')].find(v => !v.hidden);
+  if (view) view.querySelector('.bar').after(banner);
+  banner.hidden = false;
+  return { hub, sites };
+}
+
+// Must run straight from a click: browsers only show the permission prompt for a user action.
+// Resolves at once, without a prompt, when access is already granted.
+const requestAccess = () => ext.permissions.request({ origins: ACCESS_ORIGINS }).catch(() => false);
+
+$('accessBtn').onclick = () => { requestAccess().then(() => checkAccess()).then(() => load()); };
+
 // ---------- key prompt ----------
 
 function showKeyView(message) {
   $('mainView').hidden = true;
   $('newKeyView').hidden = true;
   $('keyView').hidden = false;
+  checkAccess();
   if (message) setMsg($('keyMsg'), message, 'err');
   $('keyInput').focus();
 }
 
 $('keyShow').onchange = e => { $('keyInput').type = e.target.checked ? 'text' : 'password'; };
 
-$('keyForm').onsubmit = async e => {
+$('keyForm').onsubmit = e => {
   e.preventDefault();
+  const access = requestAccess(); // first, while this still counts as a user action
   setMsg($('keyMsg'), 'Checking key with the hub…');
-  await busy($('keySave'), async () => {
+  busy($('keySave'), async () => {
+    await access;
+    if (!(await checkAccess()).hub) {
+      setMsg($('keyMsg'), 'BeaverBusters needs access to sdb.netherportal3.com to check the key. Click "Allow access" and accept the browser\'s prompt.', 'err');
+      return;
+    }
     try {
       const { me } = await call({ type: 'key:set', key: $('keyInput').value });
       $('keyInput').value = '';
@@ -300,6 +334,7 @@ async function load() {
   renderWallets();
   renderSettings();
   renderFooter();
+  checkAccess();
   loadVolumes();
   // Start the form from the hub's current verdict so a submit does not silently change it.
   const v = state.effective?.verdict;

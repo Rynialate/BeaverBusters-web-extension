@@ -46,6 +46,14 @@ node build.mjs          # builds dist/chrome, dist/firefox and a .zip of each
 
 Then click the toolbar icon (badge `KEY`), paste your hub API key, and press **Verify and save**.
 
+**If the key check says it cannot reach sdb.netherportal3.com:** the hub does not answer browser
+cross-origin (CORS) checks, so the extension can only reach it when the browser has given it access
+to the site. Chrome does this at install unless site access is set to "On click"; Firefox may not.
+**Verify and save** asks for access first, and an **Allow access** banner appears whenever it is
+missing. Accept the browser's prompt (in Firefox the popup may close; open it again). You can also
+grant it by hand: Firefox `about:addons` → BeaverBusters → Permissions, or Chrome
+`chrome://extensions` → Details → Site access → On all sites.
+
 ## Privacy and security
 
 - The key is kept in `storage.local` on this device only (never synced), and is sent only in the `X-Api-Key` header to `sdb.netherportal3.com`.

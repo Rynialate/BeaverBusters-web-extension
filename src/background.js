@@ -2,7 +2,7 @@
 // Owns the API key and every hub call; content scripts and the popup talk to it by message.
 
 import { hub, limits, ApiError, CLIENT_SOURCE } from './lib/api.js';
-import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES } from './lib/settings.js';
+import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES, HUB_ORIGIN } from './lib/settings.js';
 import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, SUPPORTED as VOLUME_CHAINS } from './lib/volume.js';
 import './lib/wallets.js';
 
@@ -744,6 +744,10 @@ async function rotateKey(apiKey) {
   return { rotated: true, token, me };
 }
 
+async function hasHubAccess() {
+  try { return await ext.permissions.contains({ origins: [HUB_ORIGIN] }); } catch { return true; }
+}
+
 // Pages opened before install have no content script; inject on demand.
 async function ensureContentScript(tabId) {
   const ok = await ext.tabs.sendMessage(tabId, { type: 'page:ping' }).catch(() => null);
@@ -760,7 +764,13 @@ ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type.startsWith('page:') && sender.tab && !fromExtension) work = handleContent(msg, sender);
   else if (fromExtension) work = handleExtension(msg);
   else return false;
-  work.then(sendResponse, e => sendResponse({ error: errInfo(e) }));
+  work.then(sendResponse, async e => {
+    // Without host access the browser blocks the request before it is sent; say so plainly.
+    if (e?.code === 'network' && !(await hasHubAccess())) {
+      e = new ApiError(0, 'no_host_access', 'The browser has not given BeaverBusters access to sdb.netherportal3.com. Click "Allow access" and accept the browser\'s prompt.');
+    }
+    sendResponse({ error: errInfo(e) });
+  });
   return true;
 });
 

@@ -7,6 +7,12 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+  <!-- Shown when the browser has not granted the site access the extension needs. -->
+  <div id="accessBanner" class="access" role="alert" hidden>
+    <p id="accessText"></p>
+    <button id="accessBtn" type="button">Allow access</button>
+  </div>
+
   <!-- Shown until a working key is saved: nothing else in the extension runs without one. -->
   <section id="keyView" hidden>
     <header class="bar"><span class="logo">🛡</span><b>BeaverBusters checker</b></header>
