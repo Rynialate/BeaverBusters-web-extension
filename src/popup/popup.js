@@ -203,7 +203,11 @@ function volumeHtml(v) {
   if (!v) return '';
   if (v.loading) return `<div class="vol muted">Checking on-chain activity…</div>`;
   const out = [];
-  if (v.usdReceived) out.push(`<b>≈ ${esc(fmtUsd(v.usdReceived))}${v.usdPartial ? '+' : ''} received</b> <span class="muted">(at today's prices${v.usdPartial ? '; at least this much' : ''})</span>`);
+  if (v.usdReceived || v.usdSent) {
+    const plus = v.usdPartial ? '+' : '';
+    const parts = [v.usdReceived ? `≈ ${fmtUsd(v.usdReceived)}${plus} in` : null, v.usdSent ? `${fmtUsd(v.usdSent)}${plus} moved out` : null].filter(Boolean);
+    out.push(`<b>${esc(parts.join(' · '))}</b> <span class="muted">(at today's prices${v.usdPartial ? '; at least this much' : ''})</span>`);
+  }
   for (const n of v.networks) {
     const bits = [];
     if (n.received !== null) bits.push(`in ${fmtAmount(n.received)} ${n.asset}`);
