@@ -38,7 +38,7 @@ const PRICE_IDS = {
   BNB: 'binancecoin', POL: 'polygon-ecosystem-token', TRX: 'tron', XRP: 'ripple', SOL: 'solana', ADA: 'cardano', TON: 'the-open-network',
 };
 
-const GROSS_NOTE = 'Received is gross: it includes change sent back to the same address.';
+const GROSS_NOTE = 'Received and sent are gross: they include change sent back to the same address.';
 
 // ---------- polite per-host fetching ----------
 
@@ -190,8 +190,9 @@ async function flushBlockchainCom() {
   const addrs = [...new Set(batch.map(b => b.address))];
   const same = (a, b) => (/^bc1/i.test(a) ? a.toLowerCase() === String(b).toLowerCase() : a === b);
   try {
-    const j = await getJson(`https://blockchain.info/multiaddr?active=${addrs.map(encodeURIComponent).join('|')}&n=${Math.min(50, addrs.length * 5)}`);
-    const rows = Array.isArray(j?.addresses) ? j.addresses : [];
+    const j = await getJson(`https://blockchain.info/multiaddr?active=${addrs.map(encodeURIComponent).join('|')}&n=${Math.min(100, Math.max(10, addrs.length * 10))}&cors=true`);
+    if (!Array.isArray(j?.addresses)) throw new VolumeError('no_data', 'blockchain.com sent no address list');
+    const rows = j.addresses;
     // Newest first: the first transaction touching an address is its last activity.
     const lastSeen = new Map();
     for (const tx of Array.isArray(j?.txs) ? j.txs : []) {
@@ -374,26 +375,32 @@ const tronscanHeaders = () => (tronscanKey ? { 'TRON-PRO-API-KEY': tronscanKey }
 const TRONSCAN_PAGE = 50;
 const TRONSCAN_PAGES = 20; // up to 1,000 USDT transfers, then the totals are marked partial
 
-// One pass over the wallet's USDT-TRC20 transfers, split into money in and money out.
-async function tronscanUsdt(address) {
+// Walk one of Tronscan's transfer lists for the wallet and split it into money in and money out.
+// `pick(t)` returns the transfer's amount in whole units, or null to skip it. Never throws after the
+// first page: a failed later page ends the walk and marks the totals partial.
+async function tronscanWalk(url, address, fromKey, toKey, pick) {
   let inn = 0, out = 0, nIn = 0, nOut = 0, partial = false, error = null, firstTs = null, lastTs = null;
+  const seen = new Set(); // the list is newest first and live: new transfers shift later pages
   for (let page = 0; page < TRONSCAN_PAGES; page++) {
     let j;
     try {
-      j = await getJson(`https://apilist.tronscanapi.com/api/token_trc20/transfers?limit=${TRONSCAN_PAGE}&start=${page * TRONSCAN_PAGE}&contract_address=${USDT_TRC20}&relatedAddress=${address}`, { headers: tronscanHeaders() });
+      j = await getJson(`${url}&limit=${TRONSCAN_PAGE}&start=${page * TRONSCAN_PAGE}`, { headers: tronscanHeaders() });
+      if (!Array.isArray(j?.token_transfers) && !Array.isArray(j?.data)) throw new VolumeError('no_data', 'tronscan sent no transfer list');
     } catch (e) {
       if (page === 0) throw e; // nothing summed yet: let TronGrid answer instead
       error = e; partial = true; break;
     }
-    const list = Array.isArray(j?.token_transfers) ? j.token_transfers : [];
+    const list = Array.isArray(j.token_transfers) ? j.token_transfers : j.data;
     for (const t of list) {
-      if (t.revert || (t.finalResult && t.finalResult !== 'SUCCESS')) continue; // failed or reverted
-      if (t.contract_address && t.contract_address !== USDT_TRC20) continue;
-      const amount = units(t.quant, decimalsOf(t.tokenInfo?.tokenDecimal) ?? 6) || 0;
-      if (t.to_address === address) { inn += amount; nIn++; }
-      else if (t.from_address === address) { out += amount; nOut++; }
-      else continue;
-      const ts = num(t.block_ts);
+      const key = t.transaction_id || t.transactionHash || t.hash;
+      if (key) { if (seen.has(key)) continue; seen.add(key); }
+      if (t.revert || (t.finalResult && t.finalResult !== 'SUCCESS') || (t.contractRet && t.contractRet !== 'SUCCESS')) continue;
+      const amount = pick(t);
+      if (amount === null) continue;
+      if (t[toKey] === address && t[fromKey] !== address) { inn += amount; nIn++; }
+      else if (t[fromKey] === address && t[toKey] !== address) { out += amount; nOut++; }
+      else continue; // to itself, or not this wallet
+      const ts = num(t.block_ts ?? t.timestamp);
       if (ts && (!lastTs || ts > lastTs)) lastTs = ts;
       if (ts && (!firstTs || ts < firstTs)) firstTs = ts;
     }
@@ -403,41 +410,68 @@ async function tronscanUsdt(address) {
   return { inn, out, nIn, nOut, partial, error, firstTs, lastTs };
 }
 
+// USDT-TRC20: Transfer events only (the list also carries approvals), checked by contract.
+const tronscanUsdt = address => tronscanWalk(
+  `https://apilist.tronscanapi.com/api/token_trc20/transfers?contract_address=${USDT_TRC20}&relatedAddress=${address}`,
+  address, 'from_address', 'to_address',
+  t => ((t.event_type && t.event_type !== 'Transfer') || (t.contract_address && t.contract_address !== USDT_TRC20)
+    ? null : units(t.quant, decimalsOf(t.tokenInfo?.tokenDecimal) ?? 6)));
+
+// Native TRX: the transfer list filtered to TRX (token "_"); it otherwise also lists TRC10 airdrops.
+const tronscanTrx = address => tronscanWalk(
+  `https://apilist.tronscanapi.com/api/transfer?address=${address}&token=_`,
+  address, 'transferFromAddress', 'transferToAddress',
+  t => ((t.tokenInfo?.tokenId ?? t.tokenName) !== '_' ? null : units(t.amount, decimalsOf(t.tokenInfo?.tokenDecimal) ?? 6)));
+
 async function tronViaTronscan(address) {
   const explorer = `https://tronscan.org/#/address/${address}`;
-  const acct = await getJson(`https://apilist.tronscanapi.com/api/accountv2?address=${address}`, { headers: tronscanHeaders() });
-  if (!acct || typeof acct !== 'object' || acct.message || acct.error) throw new VolumeError('no_data', `tronscan: ${acct?.message || acct?.error || 'no account data'}`);
-  // USDT totals from Tronscan, or from TronGrid if Tronscan will not list the transfers.
-  let usdt, usdtSource = 'tronscan.org';
-  try { usdt = await tronscanUsdt(address); } catch {
+  // /api/account answers without a key (accountv2 needs one).
+  const acct = await getJson(`https://apilist.tronscanapi.com/api/account?address=${address}`, { headers: tronscanHeaders() });
+  if (!acct || acct.address !== address) throw new VolumeError('no_data', `tronscan: ${acct?.message || acct?.error || acct?.Error || 'no account data for this address'}`);
+  const [trx, usdtWalk] = await Promise.all([tronscanTrx(address).catch(e => ({ failed: e })), tronscanUsdt(address).catch(e => ({ failed: e }))]);
+  // USDT from TronGrid if Tronscan will not list the transfers.
+  let usdt = usdtWalk, usdtSource = 'tronscan.org';
+  if (usdtWalk.failed) {
     const [i, o] = await Promise.all([trc20Total(address, USDT_TRC20, 'only_to'), trc20Total(address, USDT_TRC20, 'only_from')]);
-    usdt = { inn: i.total, out: o.total, nIn: i.count, nOut: o.count, partial: i.partial || o.partial, error: i.error || o.error, firstTs: Math.min(...[i.firstTs, o.firstTs].filter(Boolean)), lastTs: Math.max(...[i.lastTs, o.lastTs].filter(Boolean)) };
     usdtSource = 'trongrid.io';
+    usdt = (i.error && !i.count) || (o.error && !o.count)
+      ? { unavailable: true, inn: null, out: null, nIn: 0, nOut: 0, partial: true, error: i.error || o.error }
+      : { inn: i.total, out: o.total, nIn: i.count, nOut: o.count, partial: i.partial || o.partial, error: i.error || o.error, firstTs: Math.min(...[i.firstTs, o.firstTs].filter(Boolean)), lastTs: Math.max(...[i.lastTs, o.lastTs].filter(Boolean)) };
   }
-  const tokens = Array.isArray(acct.withPriceTokens) ? acct.withPriceTokens : [];
-  const usdtRow = tokens.find(t => t.tokenId === USDT_TRC20);
-  const trxRow = tokens.find(t => t.tokenId === '_');
-  const notes = [`USDT-TRC20 totals are summed from transfers (${usdtSource}); TRX lifetime totals are not available.`];
+  const trxOk = !trx.failed;
+  const usdtRow = (acct.trc20token_balances || []).find(t => t.tokenId === USDT_TRC20);
+  const notes = [`TRX and USDT-TRC20 totals are summed from transfers (Tronscan${usdtSource !== 'tronscan.org' ? '; USDT from TronGrid' : ''}).`];
+  if (!trxOk) notes.push('TRX transfers could not be loaded; only the TRX balance is shown.');
   if (num(acct.transactions_in) !== null || num(acct.transactions_out) !== null) notes.push(`Transactions in/out: ${num(acct.transactions_in) ?? '?'} / ${num(acct.transactions_out) ?? '?'}.`);
-  if (usdt.error) notes.push('Some transfer pages could not be loaded, so the USDT totals are a lower bound.');
+  if (usdt.unavailable) notes.push('USDT transfers could not be loaded from Tronscan or TronGrid; USDT totals are unavailable.');
+  else if ((trxOk && trx.error) || usdt.error) notes.push('Some transfer pages could not be loaded, so totals are a lower bound.');
   return result({
     network: 'Tron', asset: 'TRX',
-    balance: units(acct.balance ?? trxRow?.balance ?? 0, 6),
+    received: trxOk ? trx.inn : null, sent: trxOk ? trx.out : null,
+    balance: units(acct.balance ?? 0, 6),
     txCount: num(acct.totalTransactionCount),
-    firstSeen: iso(acct.date_created) || iso(usdt.firstTs),
-    lastActivity: latest(iso(acct.latest_operation_time), iso(usdt.lastTs)),
-    tokens: (usdt.nIn || usdt.nOut || usdtRow) ? [{
+    // Transfer history gives a first-seen date only when it was read to the end.
+    firstSeen: iso(acct.date_created) || iso(Math.min(...[trxOk && !trx.partial && trx.firstTs, !usdt.partial && usdt.firstTs].filter(Boolean))),
+    lastActivity: latest(iso(acct.latest_operation_time), trxOk ? iso(trx.lastTs) : null, iso(usdt.lastTs)),
+    tokens: (usdt.nIn || usdt.nOut || usdtRow || usdt.unavailable) ? [{
       symbol: 'USDT',
       balance: usdtRow ? units(usdtRow.balance, decimalsOf(usdtRow.tokenDecimal) ?? 6) : (!usdt.partial ? Math.max(0, usdt.inn - usdt.out) : null),
       received: usdt.inn, sent: usdt.out, transfersIn: usdt.nIn, transfersOut: usdt.nOut,
     }] : [],
-    partial: usdt.partial,
+    partial: (trxOk && trx.partial) || usdt.partial,
     source: 'tronscan.org', explorer, note: notes.join(' '),
   });
 }
 
 async function tron(address) {
-  return firstOf(() => tronViaTronscan(address), () => tronViaTrongrid(address));
+  try {
+    return await tronViaTronscan(address);
+  } catch (first) {
+    let r;
+    try { r = await tronViaTrongrid(address); } catch { throw first; }
+    if (tronscanKey && (first.code === 'http_401' || first.code === 'http_403')) r.note = `${r.note || ''} Tronscan refused the API key set in Settings.`.trim();
+    return r;
+  }
 }
 
 async function tronViaTrongrid(address) {
@@ -639,8 +673,10 @@ export async function usdPrices(assets) {
 // Adds usd estimates in place: received/balance of the native asset at today's price, stablecoins at $1.
 // usdPartial marks a total that is only a lower bound (capped histories or failed pages).
 export function addUsd(vol, prices) {
+  const missing = new Set();
   for (const r of vol.networks) {
     const p = prices[r.asset];
+    if (!p && ((r.received || 0) > 0 || (r.sent || 0) > 0 || (r.balance || 0) > 0)) missing.add(r.asset);
     r.usdReceived = p && r.received !== null ? r.received * p : null;
     r.usdSent = p && r.sent !== null ? r.sent * p : null;
     r.usdBalance = p && r.balance !== null ? r.balance * p : null;
@@ -655,6 +691,7 @@ export function addUsd(vol, prices) {
   vol.usdReceived = total('usdReceived');
   vol.usdSent = total('usdSent');
   vol.usdPartial = vol.networks.some(r => r.partial);
+  vol.usdMissing = [...missing]; // assets with flows but no price: their part is not in the USD totals
   vol.pricesAt = new Date().toISOString();
   return vol;
 }

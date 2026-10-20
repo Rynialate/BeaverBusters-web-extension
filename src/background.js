@@ -256,7 +256,13 @@ function volumeStale(v) {
 }
 
 async function priced(vol) {
-  try { addUsd(vol, await prices(vol.networks.map(n => n.asset))); } catch { vol.usdReceived = null; vol.pricesAt = null; } // the USD estimate is optional
+  try {
+    addUsd(vol, await prices(vol.networks.map(n => n.asset)));
+  } catch {
+    // No prices (e.g. CoinGecko unreachable): stablecoins still count at $1; retry prices later.
+    addUsd(vol, {});
+    vol.pricesAt = null;
+  }
   return vol;
 }
 
