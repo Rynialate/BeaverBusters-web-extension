@@ -213,16 +213,17 @@ function volumeHtml(v) {
   }
   for (const n of v.networks) {
     const bits = [];
-    if (n.received !== null) bits.push(`in ${fmtAmount(n.received)} ${n.asset}`);
-    if (n.sent !== null) bits.push(`out ${fmtAmount(n.sent)}`);
+    const np = n.partial ? '+' : '';
+    if (n.received !== null) bits.push(`in ${fmtAmount(n.received)}${np} ${n.asset}`);
+    if (n.sent !== null) bits.push(`out ${fmtAmount(n.sent)}${np}`);
     if (n.balance !== null) bits.push(`balance ${fmtAmount(n.balance)} ${n.asset}`);
     if (n.txCount !== null) bits.push(`${n.txCount.toLocaleString()}${n.partial ? '+' : ''} txs`);
     if (n.lastActivity) bits.push(`last active ${ago(n.lastActivity)}`);
     let line = `<b>${esc(n.network)}</b> ${esc(bits.join(' · '))}`;
     for (const t of n.tokens) {
       const tb = [];
-      if (t.received !== null) tb.push(`in ${fmtAmount(t.received)}${n.partial ? '+' : ''}`);
-      if (t.sent !== null) tb.push(`out ${fmtAmount(t.sent)}${n.partial ? '+' : ''}`);
+      if (t.received !== null) tb.push(`in ${fmtAmount(t.received)}${t.partial ? '+' : ''}`);
+      if (t.sent !== null) tb.push(`out ${fmtAmount(t.sent)}${t.partial ? '+' : ''}`);
       if (t.balance !== null) tb.push(`balance ${fmtAmount(t.balance)}`);
       if (tb.length) line += `<br>${esc(t.symbol)} ${esc(tb.join(' · '))}`;
     }
