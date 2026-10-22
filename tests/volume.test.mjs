@@ -1,5 +1,5 @@
 // Unit tests for the PURE helpers of src/lib/volume.js: units(), iso(), latest(), hasActivity(), addUsd(),
-// stableFlows().
+// stableFlows(), analyzeFlows(), utxoFlows(), walletInsights().
 // No network and no explorer payloads: every input below is a hand-written scalar or a result()-shaped
 // object, never a captured or invented API response.
 //
@@ -7,7 +7,7 @@
 //
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { units, iso, latest, hasActivity, addUsd, stableFlows } from '../src/lib/volume.js';
+import { units, iso, latest, hasActivity, addUsd, stableFlows, analyzeFlows, utxoFlows, walletInsights, SERVICE_TX_COUNT, SERVICE_BALANCE_USD } from '../src/lib/volume.js';
 
 const close = (actual, expected, rel = 1e-12) =>
   assert.ok(Math.abs(actual - expected) <= Math.abs(expected) * rel, `${actual} !~ ${expected}`);
@@ -272,5 +272,108 @@ describe('stableFlows()', () => {
 
   it('no operations -> zero totals and no timestamp', () => {
     assert.deepEqual(stableFlows([], me, 18), { inn: 0, out: 0, lastTs: null });
+  });
+});
+
+// ------------------------------------------------------------------ analyzeFlows()
+
+describe('analyzeFlows()', () => {
+  const me = '0x' + 'b'.repeat(40);
+  const real = '0x8cbd37' + '0'.repeat(30) + '1dc0';
+  const fake1 = '0x8cbdb5' + '1'.repeat(30) + '1dc0'; // same first 3 and last 4 after 0x
+  const fake2 = '0x8cbd43' + '2'.repeat(30) + '1dc0';
+  const payer = '0x' + 'a'.repeat(40);
+  const lower = a => String(a || '').toLowerCase(); // like volume.js's own normaliser
+  const f = (from, to, amount, tiny = amount < 1) => ({ from, to, amount, tiny });
+
+  it('counts distinct non-dust senders, not transfers', () => {
+    const r = analyzeFlows(me, [f(payer, me, 100), f(payer, me, 50), f(real, me, 7), f(me, real, 3)], lower);
+    assert.equal(r.senders, 2);
+    assert.deepEqual(r.poisoning, []);
+  });
+
+  it('dust-only look-alikes of a real counterparty are poisoning, and are not senders', () => {
+    const r = analyzeFlows(me, [f(me, real, 100.02), f(fake1, me, 0.0001), f(me, fake1, 0), f(fake2, me, 0.001)], lower);
+    assert.deepEqual(r.poisoning.map(p => p.fake).sort(), [fake1, fake2].sort());
+    assert.ok(r.poisoning.every(p => p.real === real));
+    assert.equal(r.senders, 0);
+  });
+
+  it('matches addresses case-insensitively through the normaliser', () => {
+    const r = analyzeFlows(me.toUpperCase().replace('0X', '0x'), [f(payer.toUpperCase().replace('0X', '0x'), me, 10)], lower);
+    assert.equal(r.senders, 1);
+  });
+
+  it('look-alikes that both moved real money are not flagged', () => {
+    const r = analyzeFlows(me, [f(me, real, 100), f(fake1, me, 50)], lower);
+    assert.deepEqual(r.poisoning, []);
+    assert.equal(r.senders, 1);
+  });
+
+  it('a dust-only address with no real look-alike is not flagged', () => {
+    assert.deepEqual(analyzeFlows(me, [f(fake1, me, 0.0001)], lower).poisoning, []);
+  });
+
+  it('Tron addresses: the leading T is not part of the match', () => {
+    const tme = 'T' + 'M'.repeat(33);
+    const treal = 'TYAS' + 'q'.repeat(26) + 'xHLS', tfake = 'TYAS' + 'z'.repeat(26) + 'xHLS';
+    const r = analyzeFlows(tme, [f(tme, treal, 500), f(tfake, tme, 0.000001)]);
+    assert.deepEqual(r.poisoning, [{ fake: tfake, real: treal }]);
+  });
+
+  it('ignores transfers that do not involve the wallet, or go to itself', () => {
+    const r = analyzeFlows(me, [f(payer, real, 100), f(me, me, 100), null], lower);
+    assert.equal(r.senders, 0);
+  });
+});
+
+// ------------------------------------------------------------------ utxoFlows()
+
+describe('utxoFlows()', () => {
+  const A = 'bc1qme', X = 'bc1qpayer1', Y = 'bc1qpayer2', Z = '1Recipient';
+  it('blockchain.com shape: one sender per incoming transaction (its first input)', () => {
+    const txs = [{ inputs: [{ prev_out: { addr: X, value: 9000 } }, { prev_out: { addr: Y, value: 9000 } }], out: [{ addr: A, value: 15000 }, { addr: X, value: 2000 }] }];
+    assert.deepEqual(utxoFlows(A, txs), [{ from: X, to: A, amount: 0.00015, tiny: false }]);
+  });
+  it('Esplora shape: spending transactions become outgoing flows, change is skipped', () => {
+    const txs = [{ vin: [{ prevout: { scriptpubkey_address: A, value: 100000 } }], vout: [{ scriptpubkey_address: Z, value: 60000 }, { scriptpubkey_address: A, value: 39000 }] }];
+    assert.deepEqual(utxoFlows(A, txs), [{ from: A, to: Z, amount: 0.0006, tiny: false }]);
+  });
+  it('dust outputs are marked tiny', () => {
+    const txs = [{ inputs: [{ prev_out: { addr: X, value: 1000 } }], out: [{ addr: A, value: 546 }] }];
+    assert.equal(utxoFlows(A, txs)[0].tiny, true);
+  });
+  it('coinbase-like transactions without input addresses are skipped', () => {
+    assert.deepEqual(utxoFlows(A, [{ inputs: [{}], out: [{ addr: A, value: 5e9 }] }]), []);
+  });
+});
+
+// ------------------------------------------------------------------ walletInsights()
+
+describe('walletInsights()', () => {
+  it('a quiet wallet is not a service, and senders are summed over networks', () => {
+    const v = walletInsights({ networks: [base({ txCount: 40, senders: 12 }), base({ txCount: 3, senders: 2, sendersPartial: true })], usdReceived: 9000 });
+    assert.equal(v.service, null);
+    assert.equal(v.senders, 14);
+    assert.equal(v.sendersPartial, true);
+  });
+  it('an explorer name tag marks a service; a scam tag does not, and is kept as risky', () => {
+    const ex = walletInsights({ networks: [base({ label: 'Binance-Hot 3', source: 'tronscan.org', network: 'Tron' })] });
+    assert.deepEqual(ex.service.reasons, [{ kind: 'tag', label: 'Binance-Hot 3', source: 'tronscan.org' }]);
+    const bad = walletInsights({ networks: [base({ label: 'Fake_Phishing123', source: 'tronscan.org' })] });
+    assert.equal(bad.service, null);
+    assert.equal(bad.tags[0].risky, true);
+  });
+  it('very high transaction count or balance marks a service', () => {
+    assert.equal(walletInsights({ networks: [base({ txCount: SERVICE_TX_COUNT })] }).service.reasons[0].kind, 'tx_count');
+    assert.equal(walletInsights({ networks: [base({ usdBalance: SERVICE_BALANCE_USD })] }).service.reasons[0].kind, 'balance_usd');
+    assert.equal(walletInsights({ networks: [base({ txCount: SERVICE_TX_COUNT - 1, usdBalance: SERVICE_BALANCE_USD - 1 })] }).service, null);
+  });
+  it('no network with a transfer list -> senders null', () => {
+    assert.equal(walletInsights({ networks: [base({})] }).senders, null);
+  });
+  it('poisoning is collected with the network it was seen on', () => {
+    const v = walletInsights({ networks: [base({ network: 'Ethereum', poisoning: [{ fake: 'f', real: 'r' }] })] });
+    assert.deepEqual(v.poisoning, [{ fake: 'f', real: 'r', network: 'Ethereum' }]);
   });
 });
