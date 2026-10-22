@@ -164,9 +164,79 @@ function result(fields) {
   return {
     network: null, asset: null, received: null, sent: null, balance: null, txCount: null, tokenTransfers: null,
     firstSeen: null, lastActivity: null, tokens: [], source: null, explorer: null, partial: false, note: null,
+    senders: null, sendersPartial: false, poisoning: [], label: null,
     ...fields,
   };
 }
+
+// ---------- transfer analysis ----------
+// Adapters that read a transfer history pass it here as [{ from, to, amount, tiny }], where `tiny`
+// marks dust (zero-value or a few cents) that says nothing about who paid the wallet.
+
+// Below these amounts a transfer is dust. Stablecoins use STABLE_DUST.
+const DUST = { BTC: 0.00001, ETH: 0.0001, BNB: 0.0005, TRX: 1 };
+const STABLE_DUST = 1;
+const isTiny = (amount, asset) => !(amount >= (DUST[asset] ?? STABLE_DUST));
+
+// What a wallet shows of an address: the characters after the fixed prefix, first 3 and last 4.
+// Poisoners generate addresses that match exactly these.
+function lookalikeKey(a) {
+  const body = String(a).replace(/^(0x|bc1[qp]|ltc1q|[13LMT])/, '');
+  return body.length >= 10 ? body.slice(0, 3) + '…' + body.slice(-4) : null;
+}
+
+// Distinct senders (non-dust incoming transfers) and address poisoning: counterparties that only
+// sent or received dust while matching the start and end of a real counterparty's address.
+export function analyzeFlows(address, flows, norm = a => String(a || '')) {
+  const me = norm(address);
+  const cps = new Map(); // counterparty -> { real: any non-dust transfer }
+  for (const f of flows) {
+    const from = norm(f?.from), to = norm(f?.to);
+    const other = from === me && to !== me ? to : to === me && from !== me ? from : null;
+    if (!other) continue;
+    const c = cps.get(other) || { real: false };
+    if (!f.tiny) c.real = true;
+    cps.set(other, c);
+  }
+  const groups = new Map();
+  for (const [a, c] of cps) {
+    const k = lookalikeKey(a);
+    if (k) groups.set(k, [...(groups.get(k) || []), { a, ...c }]);
+  }
+  const poisoning = [], fakes = new Set();
+  for (const g of groups.values()) {
+    const real = g.find(x => x.real);
+    if (!real) continue;
+    for (const x of g) if (!x.real) { fakes.add(x.a); poisoning.push({ fake: x.a, real: real.a }); }
+  }
+  const senders = new Set();
+  for (const f of flows) {
+    const from = norm(f?.from);
+    if (norm(f?.to) === me && from && from !== me && !f.tiny && !fakes.has(from)) senders.add(from);
+  }
+  return { senders: senders.size, poisoning };
+}
+
+// Bitcoin-style transactions (blockchain.com or Esplora shape) -> flows for `address`. Each incoming
+// transaction counts once, with its first input as the sender (inputs of one transaction are
+// normally one wallet's).
+export function utxoFlows(address, txs, same = (a, b) => a === b, asset = 'BTC') {
+  const flows = [];
+  for (const tx of txs || []) {
+    const ins = (tx?.inputs || tx?.vin || []).map(i => (i?.prev_out ? i.prev_out.addr : i?.prevout?.scriptpubkey_address)).filter(Boolean);
+    const outs = (tx?.out || tx?.vout || []).map(o => ({ a: o?.addr ?? o?.scriptpubkey_address, v: num(o?.value) || 0 }));
+    if (ins.some(a => same(address, a))) {
+      for (const o of outs) if (o.a && !same(address, o.a)) flows.push({ from: address, to: o.a, amount: o.v / 1e8, tiny: isTiny(o.v / 1e8, asset) });
+    } else if (ins.length) {
+      const v = outs.filter(o => same(address, o.a)).reduce((s, o) => s + o.v, 0) / 1e8;
+      if (v > 0) flows.push({ from: ins[0], to: address, amount: v, tiny: isTiny(v, asset) });
+    }
+  }
+  return flows;
+}
+
+const btcNorm = a => (/^(bc1|ltc1)/i.test(String(a || '')) ? String(a).toLowerCase() : String(a || ''));
+const evmNorm = a => String(a || '').toLowerCase();
 
 // ---------- adapters ----------
 
@@ -191,14 +261,18 @@ async function flushBlockchainCom() {
   const addrs = [...new Set(batch.map(b => b.address))];
   const same = (a, b) => (/^bc1/i.test(a) ? a.toLowerCase() === String(b).toLowerCase() : a === b);
   try {
-    const j = await getJson(`https://blockchain.info/multiaddr?active=${addrs.map(encodeURIComponent).join('|')}&n=${Math.min(100, Math.max(10, addrs.length * 10))}&cors=true`);
+    const j = await getJson(`https://blockchain.info/multiaddr?active=${addrs.map(encodeURIComponent).join('|')}&n=100&cors=true`);
     if (!Array.isArray(j?.addresses)) throw new VolumeError('no_data', 'blockchain.com sent no address list');
     const rows = j.addresses;
     // Newest first: the first transaction touching an address is its last activity.
-    const lastSeen = new Map();
+    const lastSeen = new Map(), txsOf = new Map(addrs.map(a => [a, []]));
     for (const tx of Array.isArray(j?.txs) ? j.txs : []) {
       const touched = [...(tx.inputs || []).map(i => i.prev_out?.addr), ...(tx.out || []).map(o => o.addr)].filter(Boolean);
-      for (const a of addrs) if (!lastSeen.has(a) && touched.some(t => same(a, t))) lastSeen.set(a, tx.time);
+      for (const a of addrs) {
+        if (!touched.some(t => same(a, t))) continue;
+        if (!lastSeen.has(a)) lastSeen.set(a, tx.time);
+        txsOf.get(a).push(tx);
+      }
     }
     // The shared transaction list can be filled by one busy address; look the others up one by one.
     const gaps = addrs.filter(a => !lastSeen.has(a) && num(rows.find(r => same(a, r.address))?.n_tx) > 0);
@@ -210,11 +284,15 @@ async function flushBlockchainCom() {
     for (const b of batch) {
       const a = rows.find(r => same(b.address, r.address));
       if (!a) { b.reject(new VolumeError('no_data', 'blockchain.com returned no data for this address')); continue; }
+      // The transaction list is shared by the batch, so it may hold only some of this address's history.
+      const seen = txsOf.get(b.address) || [];
+      const fl = analyzeFlows(b.address, utxoFlows(b.address, seen, same), btcNorm);
       b.resolve(result({
         network: 'Bitcoin', asset: 'BTC',
         received: units(a.total_received, 8), sent: units(a.total_sent, 8), balance: units(a.final_balance, 8),
         txCount: num(a.n_tx),
         lastActivity: iso(lastSeen.get(b.address)),
+        senders: fl.senders, sendersPartial: seen.length < (num(a.n_tx) || 0), poisoning: fl.poisoning,
         source: 'blockchain.com', explorer: `https://www.blockchain.com/explorer/addresses/btc/${b.address}`, note: GROSS_NOTE,
       }));
     }
@@ -251,13 +329,17 @@ async function esplora(base, network, asset, explorer, address) {
   const funded = (c.funded_txo_sum || 0) + (m.funded_txo_sum || 0);
   const spent = (c.spent_txo_sum || 0) + (m.spent_txo_sum || 0);
   const txCount = (c.tx_count || 0) + (m.tx_count || 0);
-  let lastActivity = null;
+  let lastActivity = null, fl = null, listed = 0;
   if (txCount) {
     const txs = await getJson(`${base}/api/address/${address}/txs`).catch(() => null);
     const t = Array.isArray(txs) && txs[0];
     if (t) lastActivity = t.status?.confirmed ? iso(t.status.block_time) : new Date().toISOString();
+    if (Array.isArray(txs)) { fl = analyzeFlows(address, utxoFlows(address, txs, (x, y) => btcNorm(x) === btcNorm(y), asset), btcNorm); listed = txs.length; }
   }
-  return result({ network, asset, received: funded / 1e8, sent: spent / 1e8, balance: (funded - spent) / 1e8, txCount, lastActivity, source, explorer, note: GROSS_NOTE });
+  return result({
+    network, asset, received: funded / 1e8, sent: spent / 1e8, balance: (funded - spent) / 1e8, txCount, lastActivity, source, explorer, note: GROSS_NOTE,
+    ...(fl ? { senders: fl.senders, sendersPartial: listed < txCount, poisoning: fl.poisoning } : txCount === 0 ? { senders: 0 } : {}),
+  });
 }
 
 async function blockchair(slug, network, asset, address, decimals = 8) {
@@ -320,13 +402,20 @@ async function ethplorer(host, network, asset, explorerBase, address) {
   }
   const e = j.ETH || j.BNB || {};
   const [nativeTx, tokenOps] = await Promise.all([
-    getJson(`https://${host}/getAddressTransactions/${address}?${q}&limit=1&showZeroValues=1`).catch(() => null),
+    getJson(`https://${host}/getAddressTransactions/${address}?${q}&limit=${ETHPLORER_HISTORY}&showZeroValues=1`).catch(() => null),
     getJson(`https://${host}/getAddressHistory/${address}?${q}&type=transfer&limit=1`).catch(() => null),
   ]);
   // No token transfer at all (and none held): skip the per-contract history requests.
   const anyTokenOps = !Array.isArray(tokenOps?.operations) || tokenOps.operations.length > 0 || listed.size > 0;
   const tokens = [];
   let capped = false, stableTs = null, failed = 0;
+  const flows = [];
+  const nativeOk = Array.isArray(nativeTx);
+  for (const t of nativeOk ? nativeTx : []) {
+    if (t?.success === false) continue;
+    const v = num(t?.value);
+    if (v !== null) flows.push({ from: t.from, to: t.to, amount: v, tiny: isTiny(v, asset) });
+  }
   for (const [contract, symbol] of anyTokenOps ? Object.entries(STABLES[network] || {}) : []) {
     let h;
     try { h = await getJson(`https://${host}/getAddressHistory/${address}?${q}&token=${contract}&type=transfer&limit=${ETHPLORER_HISTORY}`); } catch { h = null; }
@@ -340,11 +429,16 @@ async function ethplorer(host, network, asset, explorerBase, address) {
     const dec = held?.decimals ?? decimalsOf(h.operations[0]?.tokenInfo?.decimals);
     if (dec === null) continue;
     const f = stableFlows(h.operations, address, dec);
+    for (const op of h.operations) {
+      const v = units(op?.value, dec);
+      if (v !== null && (!op.type || op.type === 'transfer')) flows.push({ from: op.from, to: op.to, amount: v, tiny: isTiny(v, symbol) });
+    }
     const full = h.operations.length >= ETHPLORER_HISTORY;
     capped ||= full;
     stableTs = Math.max(stableTs || 0, f.lastTs || 0) || stableTs;
     tokens.push({ symbol, balance: held ? held.balance : 0, received: f.inn, sent: f.out, partial: full });
   }
+  const fl = analyzeFlows(address, flows, evmNorm);
   const notes = [];
   if (e.balance === undefined) notes.push(`${host} did not report the native ${asset} figures.`);
   if (failed) notes.push('Some stablecoin histories could not be loaded; totals are a lower bound.');
@@ -354,6 +448,9 @@ async function ethplorer(host, network, asset, explorerBase, address) {
     received: num(e.totalIn), sent: num(e.totalOut), balance: num(e.balance),
     txCount: num(j.countTxs),
     lastActivity: latest(Array.isArray(nativeTx) && nativeTx[0] ? iso(nativeTx[0].timestamp) : null, iso(tokenOps?.operations?.[0]?.timestamp), iso(stableTs)),
+    senders: nativeOk || flows.length ? fl.senders : null,
+    sendersPartial: !nativeOk || nativeTx.length >= ETHPLORER_HISTORY || capped || failed > 0,
+    poisoning: fl.poisoning,
     tokens, source: host.replace(/^api\./, ''), explorer: `${explorerBase}${address}`,
     note: notes.join(' ') || null,
   });
@@ -398,6 +495,7 @@ const EVM_NETWORKS = [
 async function trc20Total(address, contract, direction) {
   let url = `https://api.trongrid.io/v1/accounts/${address}/transactions/trc20?${direction}=true&contract_address=${contract}&limit=200`;
   let total = 0, count = 0, partial = false, lastTs = null, firstTs = null, error = null;
+  const flows = [];
   for (let page = 0; page < TRC20_PAGES && url; page++) {
     let j;
     try { j = await getJson(url); } catch (e) { error = e; partial = true; break; }
@@ -405,15 +503,17 @@ async function trc20Total(address, contract, direction) {
       // The endpoint also returns Approval events (often 2^256-1); only count real transfers.
       if (t.type && t.type !== 'Transfer') continue;
       if (t.token_info?.address && t.token_info.address !== contract) continue;
-      total += units(t.value, decimalsOf(t.token_info?.decimals) ?? 6) || 0;
+      const v = units(t.value, decimalsOf(t.token_info?.decimals) ?? 6) || 0;
+      total += v;
       count++;
+      flows.push({ from: t.from, to: t.to, amount: v, tiny: isTiny(v, 'USDT') });
       if (!lastTs || t.block_timestamp > lastTs) lastTs = t.block_timestamp;
       if (!firstTs || t.block_timestamp < firstTs) firstTs = t.block_timestamp;
     }
     url = j?.meta?.links?.next || null;
     if (url && page === TRC20_PAGES - 1) partial = true;
   }
-  return { total, count, partial, lastTs, firstTs, error };
+  return { total, count, partial, lastTs, firstTs, error, flows };
 }
 
 // ---- Tronscan ----
@@ -428,8 +528,9 @@ const TRONSCAN_PAGES = 20; // up to 1,000 USDT transfers, then the totals are ma
 // Walk one of Tronscan's transfer lists for the wallet and split it into money in and money out.
 // `pick(t)` returns the transfer's amount in whole units, or null to skip it. Never throws after the
 // first page: a failed later page ends the walk and marks the totals partial.
-async function tronscanWalk(url, address, fromKey, toKey, pick) {
+async function tronscanWalk(url, address, fromKey, toKey, pick, asset) {
   let inn = 0, out = 0, nIn = 0, nOut = 0, partial = false, error = null, firstTs = null, lastTs = null;
+  const flows = [];
   const seen = new Set(); // the list is newest first and live: new transfers shift later pages
   for (let page = 0; page < TRONSCAN_PAGES; page++) {
     let j;
@@ -451,6 +552,7 @@ async function tronscanWalk(url, address, fromKey, toKey, pick) {
       if (t[toKey] === address && t[fromKey] !== address) { inn += amount; nIn++; }
       else if (t[fromKey] === address && t[toKey] !== address) { out += amount; nOut++; }
       else continue; // to itself, or not this wallet
+      flows.push({ from: t[fromKey], to: t[toKey], amount, tiny: isTiny(amount, asset) });
       const ts = num(t.block_ts ?? t.timestamp);
       if (ts && (!lastTs || ts > lastTs)) lastTs = ts;
       if (ts && (!firstTs || ts < firstTs)) firstTs = ts;
@@ -458,7 +560,7 @@ async function tronscanWalk(url, address, fromKey, toKey, pick) {
     if (list.length < TRONSCAN_PAGE) break;
     if (page === TRONSCAN_PAGES - 1) partial = true;
   }
-  return { inn, out, nIn, nOut, partial, error, firstTs, lastTs };
+  return { inn, out, nIn, nOut, partial, error, firstTs, lastTs, flows };
 }
 
 // USDT-TRC20: Transfer events only (the list also carries approvals), checked by contract.
@@ -466,13 +568,13 @@ const tronscanUsdt = address => tronscanWalk(
   `https://apilist.tronscanapi.com/api/token_trc20/transfers?contract_address=${USDT_TRC20}&relatedAddress=${address}`,
   address, 'from_address', 'to_address',
   t => ((t.event_type && t.event_type !== 'Transfer') || (t.contract_address && t.contract_address !== USDT_TRC20)
-    ? null : units(t.quant, decimalsOf(t.tokenInfo?.tokenDecimal) ?? 6)));
+    ? null : units(t.quant, decimalsOf(t.tokenInfo?.tokenDecimal) ?? 6)), 'USDT');
 
 // Native TRX: the transfer list filtered to TRX (token "_"); it otherwise also lists TRC10 airdrops.
 const tronscanTrx = address => tronscanWalk(
   `https://apilist.tronscanapi.com/api/transfer?address=${address}&token=_`,
   address, 'transferFromAddress', 'transferToAddress',
-  t => ((t.tokenInfo?.tokenId ?? t.tokenName) !== '_' ? null : units(t.amount, decimalsOf(t.tokenInfo?.tokenDecimal) ?? 6)));
+  t => ((t.tokenInfo?.tokenId ?? t.tokenName) !== '_' ? null : units(t.amount, decimalsOf(t.tokenInfo?.tokenDecimal) ?? 6)), 'TRX');
 
 async function tronViaTronscan(address) {
   const explorer = `https://tronscan.org/#/address/${address}`;
@@ -487,9 +589,10 @@ async function tronViaTronscan(address) {
     usdtSource = 'trongrid.io';
     usdt = (i.error && !i.count) || (o.error && !o.count)
       ? { unavailable: true, inn: null, out: null, nIn: 0, nOut: 0, partial: true, error: i.error || o.error }
-      : { inn: i.total, out: o.total, nIn: i.count, nOut: o.count, partial: i.partial || o.partial, error: i.error || o.error, firstTs: Math.min(...[i.firstTs, o.firstTs].filter(Boolean)), lastTs: Math.max(...[i.lastTs, o.lastTs].filter(Boolean)) };
+      : { inn: i.total, out: o.total, nIn: i.count, nOut: o.count, partial: i.partial || o.partial, error: i.error || o.error, firstTs: Math.min(...[i.firstTs, o.firstTs].filter(Boolean)), lastTs: Math.max(...[i.lastTs, o.lastTs].filter(Boolean)), flows: [...i.flows, ...o.flows] };
   }
   const trxOk = !trx.failed;
+  const fl = analyzeFlows(address, [...(trxOk ? trx.flows : []), ...(usdt.flows || [])]);
   const usdtRow = (acct.trc20token_balances || []).find(t => t.tokenId === USDT_TRC20);
   const notes = [`TRX and USDT-TRC20 totals are summed from transfers (Tronscan${usdtSource !== 'tronscan.org' ? '; USDT from TronGrid' : ''}).`];
   if (!num(acct.date_created)) notes.unshift('Not activated (no TRX yet).');
@@ -511,6 +614,9 @@ async function tronViaTronscan(address) {
       received: usdt.inn, sent: usdt.out, transfersIn: usdt.nIn, transfersOut: usdt.nOut, partial: !!usdt.partial,
     }] : [],
     partial: trxOk && trx.partial,
+    senders: fl.senders, sendersPartial: !trxOk || trx.partial || !!usdt.partial, poisoning: fl.poisoning,
+    // Tronscan's own public name tag (e.g. an exchange hot wallet); account names set by owners are not used.
+    label: typeof acct.addressTag === 'string' && acct.addressTag.trim() ? acct.addressTag.trim() : null,
     source: 'tronscan.org', explorer, note: notes.join(' '),
   });
 }
@@ -551,6 +657,8 @@ async function tronViaTrongrid(address) {
       balance: usdtBal !== undefined ? units(usdtBal, 6) : (!partial ? Math.max(0, inn.total - out.total) : null),
       received: inn.total, sent: out.total, transfersIn: inn.count, transfersOut: out.count, partial,
     }] : [],
+    // Senders from USDT transfers only: TronGrid has no TRX transfer walk here.
+    ...(() => { const fl = analyzeFlows(address, [...inn.flows, ...out.flows]); return { senders: fl.senders, sendersPartial: true, poisoning: fl.poisoning }; })(),
     source: 'trongrid.io', explorer, note: notes.join(' '),
   });
 }
@@ -745,5 +853,37 @@ export function addUsd(vol, prices) {
   vol.usdPartial = vol.networks.some(r => r.partial || r.tokens.some(t => t.partial));
   vol.usdMissing = [...missing]; // assets with flows but no price: their part is not in the USD totals
   vol.pricesAt = new Date().toISOString();
+  return vol;
+}
+
+// ---------- wallet insights ----------
+
+// A wallet past any of these is more likely an exchange or payment service than a scammer's own
+// wallet. Explorer name tags (Tronscan) count too, unless the tag itself says scam.
+export const SERVICE_TX_COUNT = 100000;
+export const SERVICE_BALANCE_USD = 5e6;
+export const SERVICE_RECEIVED_USD = 5e7;
+const RISK_TAG = /scam|fraud|phish|hack|exploit|stolen|drain|ponzi|sanction|theft|heist|fake/i;
+
+// Wallet-level summary of the per-network analysis; run after addUsd() (it reads the USD figures).
+//   service:  { reasons: [{ kind: 'tag', label, source } | { kind: 'tx_count' | 'balance_usd' | 'received_usd', value }] } or null
+//   tags:     explorer name tags, with `risky` for the ones that say scam/phishing/...
+//   senders:  distinct senders, summed over networks (null when no network had a transfer list)
+//   poisoning: [{ fake, real, network }]
+export function walletInsights(vol) {
+  const nets = vol.networks || [];
+  const tags = nets.filter(n => n.label).map(n => ({ label: n.label, source: n.source, network: n.network, risky: RISK_TAG.test(n.label) }));
+  const reasons = tags.filter(t => !t.risky).map(t => ({ kind: 'tag', label: t.label, source: t.source }));
+  const maxTx = Math.max(0, ...nets.map(n => n.txCount || 0));
+  if (maxTx >= SERVICE_TX_COUNT) reasons.push({ kind: 'tx_count', value: maxTx });
+  const balance = nets.reduce((s, n) => s + (n.usdBalance || 0), 0);
+  if (balance >= SERVICE_BALANCE_USD) reasons.push({ kind: 'balance_usd', value: balance });
+  if ((vol.usdReceived || 0) >= SERVICE_RECEIVED_USD) reasons.push({ kind: 'received_usd', value: vol.usdReceived });
+  vol.service = reasons.length ? { reasons } : null;
+  vol.tags = tags;
+  const counted = nets.filter(n => Number.isFinite(n.senders));
+  vol.senders = counted.length ? counted.reduce((s, n) => s + n.senders, 0) : null;
+  vol.sendersPartial = counted.some(n => n.sendersPartial);
+  vol.poisoning = nets.flatMap(n => (n.poisoning || []).map(p => ({ ...p, network: n.network })));
   return vol;
 }

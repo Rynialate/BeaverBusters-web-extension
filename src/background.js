@@ -3,7 +3,7 @@
 
 import { hub, limits, ApiError, CLIENT_SOURCE } from './lib/api.js';
 import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES, HUB_ORIGIN } from './lib/settings.js';
-import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, setTronscanKey, SUPPORTED as VOLUME_CHAINS } from './lib/volume.js';
+import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, setTronscanKey, SUPPORTED as VOLUME_CHAINS, walletInsights } from './lib/volume.js';
 import './lib/wallets.js';
 
 const W = globalThis.BBWallets;
@@ -230,14 +230,25 @@ function whyInvalid(raw) {
 
 // ---------- on-chain volume (lib/volume.js) ----------
 
-async function prices(assets) {
+// One lookup at a time: wallets priced together would otherwise each overwrite the shared cache with
+// only their own coins, and the dropped coins cost CoinGecko calls again (it rate-limits quickly).
+let priceQueue = Promise.resolve();
+function prices(assets) {
+  const run = priceQueue.then(() => pricesNow(assets));
+  priceQueue = run.catch(() => {});
+  return run;
+}
+
+async function pricesNow(assets) {
   const v = (await session.get('prices')).prices;
   const have = v && Date.now() - v.at < PRICE_TTL ? v.data : {};
   const missing = [...new Set(assets)].filter(a => !(a in have));
   if (!missing.length) return have;
-  const got = await usdPrices([...new Set([...Object.keys(have), ...missing])]);
+  // Only the missing coins: cached prices stay as they are until the cache expires, so every wallet
+  // priced meanwhile uses the same price. The cache keeps its first timestamp.
+  const got = await usdPrices(missing);
   const data = { ...have, ...got };
-  await session.set({ prices: { at: Date.now(), data } });
+  await session.set({ prices: { at: Object.keys(have).length ? v.at : Date.now(), data } });
   return data;
 }
 
@@ -263,7 +274,7 @@ async function priced(vol) {
     addUsd(vol, {});
     vol.pricesAt = null;
   }
-  return vol;
+  return walletInsights(vol);
 }
 
 async function volumeFor(w) {
@@ -408,7 +419,8 @@ async function maybeAutoSubmit(apiKey, settings, tabId, state) {
   const eff = effective(state.check);
   if (!settings.autoSubmitWallets || !state.check?.known) return;
   if (eff.verdict !== 'scam' && eff.verdict !== 'suspected') return;
-  const fresh = state.wallets.filter(w => w.confidence === 'high' && w.result && !w.result.onThisDomain && !w.result.excluded);
+  // Wallets that look like an exchange or service (when on-chain figures are already known) are left out.
+  const fresh = state.wallets.filter(w => w.confidence === 'high' && w.result && !w.result.onThisDomain && !w.result.excluded && !w.volume?.service);
   if (!fresh.length) return;
   const sent = (await cacheGet('as:' + state.check.domain, 24 * 3600 * 1000)) || [];
   const todo = fresh.filter(w => !sent.includes(w.address));
@@ -482,6 +494,11 @@ function volumeReport(vols, now) {
     usd_received: v.usdReceived === null || v.usdReceived === undefined ? null : Math.round(v.usdReceived),
     usd_sent: v.usdSent === null || v.usdSent === undefined ? null : Math.round(v.usdSent),
     usd_partial: !!v.usdPartial,
+    distinct_senders: v.senders ?? null,
+    senders_partial: !!v.sendersPartial,
+    likely_service: v.service ? { reasons: v.service.reasons.map(r => (r.kind === 'tag' ? r : { kind: r.kind, value: Math.round(r.value) })) } : null,
+    explorer_tags: (v.tags || []).map(t => ({ label: t.label, source: t.source, network: t.network, risky: t.risky })),
+    address_poisoning: (v.poisoning || []).map(p => ({ fake: p.fake, imitates: p.real, network: p.network })),
     errors: v.errors.map(e => ({ network: e.network, code: e.code })),
     networks: v.networks.map(n => ({
       network: n.network, asset: n.asset,
@@ -491,6 +508,7 @@ function volumeReport(vols, now) {
       usd_sent: n.usdSent === null || n.usdSent === undefined ? null : Math.round(n.usdSent),
       tokens: n.tokens.map(t => ({ symbol: t.symbol, received: round(t.received), sent: round(t.sent), balance: round(t.balance), partial: !!t.partial })),
       partial: n.partial, source: n.source,
+      senders: n.senders ?? null, senders_partial: !!n.sendersPartial, label: n.label || null,
     })),
   }));
   // funded: activity seen; no_activity: every explorer answered and none saw activity;
@@ -501,7 +519,7 @@ function volumeReport(vols, now) {
     kind: 'wallet_volume',
     result: active ? 'funded' : complete ? 'no_activity' : 'unknown',
     checked_at: vols.map(v => v.at).sort()[0] || now,
-    detail: { note: 'Lifetime on-chain totals from public explorers; UTXO "received" is gross (includes change); USD at the price when checked; usd_partial marks lower bounds.', wallets },
+    detail: { note: 'Lifetime on-chain totals from public explorers; UTXO "received" is gross (includes change); USD at the price when checked; usd_partial marks lower bounds. distinct_senders counts non-dust incoming transfers in the transfer history read (summed over networks); likely_service flags exchange-like wallets; address_poisoning lists look-alike counterparties that only moved dust.', wallets },
   };
 }
 

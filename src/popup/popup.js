@@ -167,12 +167,22 @@ function renderStatus() {
 
 function walletTags(w) {
   const r = w.result;
-  if (!r) return `<span class="tag t-grey">${esc(w.error?.code || 'pending')}</span>`;
-  if (!r.known) return `<span class="tag t-info">NEW</span>`;
+  if (!r) return `<span class="tag t-grey">${esc(w.error?.code || 'pending')}</span>` + insightTags(w.volume);
+  if (!r.known) return `<span class="tag t-info">NEW</span>` + insightTags(w.volume);
   let t = r.scamDomains ? `<span class="tag t-scam">${r.scamDomains} scam site(s)</span>` : `<span class="tag t-grey">${r.domainCount} site(s)</span>`;
   if (r.onThisDomain) t += `<span class="tag t-grey">on this site</span>`;
   if (r.submitted) t += `<span class="tag t-warn">submitted</span>`;
   if (r.excluded) t += `<span class="tag t-grey" title="${esc(r.excludeReason || '')}">excluded</span>`;
+  return t + insightTags(w.volume);
+}
+
+// Chips from the on-chain analysis (see volumeHtml for the details).
+function insightTags(v) {
+  if (!v || v.loading) return '';
+  let t = '';
+  if (v.service) t += `<span class="tag t-info" title="${esc(serviceText(v.service))}">likely exchange</span>`;
+  if (v.tags?.some(x => x.risky)) t += `<span class="tag t-scam">explorer: ${esc(v.tags.find(x => x.risky).label)}</span>`;
+  if (v.poisoning?.length) t += `<span class="tag t-warn">address poisoning</span>`;
   return t;
 }
 
@@ -185,6 +195,23 @@ function fmtAmount(n) {
   return Number(n.toFixed(digits)).toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 const fmtUsd = n => '$' + Math.round(n).toLocaleString();
+const fmtUsdShort = n => (n >= 1e9 ? `$${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : fmtUsd(n));
+const shortAddr = a => (a.length > 14 ? `${a.slice(0, 8)}…${a.slice(-4)}` : a);
+
+function serviceText(s) {
+  return s.reasons.map(r => (r.kind === 'tag' ? `tagged “${r.label}” on ${r.source}`
+    : r.kind === 'tx_count' ? `${r.value.toLocaleString()} transactions`
+    : r.kind === 'balance_usd' ? `holds ≈ ${fmtUsdShort(r.value)}` : `≈ ${fmtUsdShort(r.value)} received`)).join(' · ');
+}
+
+// One example in full, then the totals: "0x8cbdb5…1dc0 imitates 0x8cbd37…1dc0 (Ethereum); 7 look-alikes of 4 addresses in all".
+function poisoningText(list) {
+  const reals = new Set(list.map(p => `${p.real}|${p.network}`));
+  const p = list[0];
+  let t = `${shortAddr(p.fake)} imitates ${shortAddr(p.real)} (${p.network})`;
+  if (list.length > 1) t += `; ${list.length} look-alikes of ${reals.size} address${reals.size === 1 ? '' : 'es'} in all`;
+  return t;
+}
 
 function ago(when) {
   const s = (Date.now() - new Date(when).getTime()) / 1000;
@@ -203,6 +230,10 @@ function volumeHtml(v) {
   if (!v) return '';
   if (v.loading) return `<div class="vol muted">Checking on-chain activity…</div>`;
   const out = [];
+  const flags = [];
+  for (const t of (v.tags || []).filter(x => x.risky)) flags.push(`<div class="flag f-scam">${esc(t.source)} tags this address “${esc(t.label)}”.</div>`);
+  if (v.service) flags.push(`<div class="flag f-svc"><b>Likely an exchange or service wallet:</b> ${esc(serviceText(v.service))}. Probably not the scammer's own wallet: check before submitting it.</div>`);
+  if (v.poisoning?.length) flags.push(`<div class="flag f-poison"><b>Address poisoning:</b> ${esc(poisoningText(v.poisoning))}. They send dust so the wrong address gets copied from the history.</div>`);
   if (v.usdReceived || v.usdSent) {
     const plus = v.usdPartial || v.usdMissing?.length ? '+' : '';
     const parts = [v.usdReceived ? `${fmtUsd(v.usdReceived)}${plus} in` : null, v.usdSent ? `${fmtUsd(v.usdSent)}${plus} moved out` : null].filter(Boolean);
@@ -211,6 +242,8 @@ function volumeHtml(v) {
   } else if (v.usdMissing?.length) {
     out.push(`<span class="muted">No USD estimate: prices for ${esc(v.usdMissing.join(', '))} could not be loaded.</span>`);
   }
+  const withSenders = v.networks.filter(n => n.senders > 0);
+  if (withSenders.length > 1) out.push(`From ${v.senders.toLocaleString()}${v.sendersPartial ? '+' : ''} distinct senders <span class="muted">(non-dust payments in, summed over networks)</span>`);
   for (const n of v.networks) {
     const bits = [];
     const np = n.partial ? '+' : '';
@@ -218,6 +251,7 @@ function volumeHtml(v) {
     if (n.sent !== null) bits.push(`out ${fmtAmount(n.sent)}${np}`);
     if (n.balance !== null) bits.push(`balance ${fmtAmount(n.balance)} ${n.asset}`);
     if (n.txCount !== null) bits.push(`${n.txCount.toLocaleString()}${n.partial ? '+' : ''} txs`);
+    if (n.senders > 0) bits.push(`${n.senders.toLocaleString()}${n.sendersPartial ? '+' : ''} sender${n.senders === 1 && !n.sendersPartial ? '' : 's'}`);
     if (n.lastActivity) bits.push(`last active ${ago(n.lastActivity)}`);
     let line = `<b>${esc(n.network)}</b> ${esc(bits.join(' · '))}`;
     for (const t of n.tokens) {
@@ -241,7 +275,7 @@ function volumeHtml(v) {
     for (const e of v.errors) groups.set(why(e), [...(groups.get(why(e)) || []), W.chainLabel(e.network)]);
     for (const [reason, names] of groups) out.push(`<span class="muted">Not checked (${esc(reason)}): ${esc(names.join(', '))}</span>`);
   }
-  return `<div class="vol">${out.join('<br>')}</div>`;
+  return `<div class="vol">${flags.join('')}${out.join('<br>')}</div>`;
 }
 
 async function loadVolumes() {
@@ -262,6 +296,7 @@ async function loadVolumes() {
     else if (w.volume?.loading) delete w.volume;
   }
   renderWalletList();
+  renderChecklist(); // exchange-like wallets found now get unticked unless the user chose otherwise
 }
 
 // Sites a wallet is on beyond the sample shown (the current site is not counted).
@@ -283,14 +318,16 @@ function renderWalletList() {
 
 }
 
-// Submit checklist: pre-tick confident addresses not already on record for this site.
-// Choices the user already made are kept when the list is rebuilt.
+// Submit checklist: pre-tick confident addresses not already on record for this site, leaving out
+// wallets that look like an exchange or service. Choices the user made are kept when the list is rebuilt.
 function renderChecklist() {
   const ws = state.tab?.wallets || [];
-  const prev = new Map([...document.querySelectorAll('#submitWallets input')].map(i => [i.dataset.addr, i.checked]));
+  const prev = new Map([...document.querySelectorAll('#submitWallets input[data-touched]')].map(i => [i.dataset.addr, i.checked]));
   $('submitWallets').innerHTML = ws.map((w, i) => {
-    const ticked = prev.has(w.address) ? prev.get(w.address) : w.confidence === 'high' && !w.result?.onThisDomain && !w.result?.excluded;
-    return `<label class="inline"><input type="checkbox" data-addr="${esc(w.address)}" id="sw${i}" ${ticked ? 'checked' : ''}><code>${esc(w.address)}</code></label>`;
+    const touched = prev.has(w.address);
+    const ticked = touched ? prev.get(w.address) : w.confidence === 'high' && !w.result?.onThisDomain && !w.result?.excluded && !w.volume?.service;
+    const note = w.volume?.service ? ` <span class="muted">likely exchange</span>` : '';
+    return `<label class="inline"><input type="checkbox" data-addr="${esc(w.address)}" id="sw${i}" ${ticked ? 'checked' : ''}${touched ? ' data-touched="1"' : ''}><code>${esc(w.address)}</code>${note}</label>`;
   }).join('');
 }
 
@@ -382,6 +419,7 @@ $('claimBtn').onclick = () => busy($('claimBtn'), async () => {
 
 $('reasons').innerHTML = REASON_CODES.map(c => `<label><input type="checkbox" value="${c}">${c.replace(/_/g, ' ')}</label>`).join('');
 $('reasons').addEventListener('change', e => { e.target.dataset.touched = '1'; });
+$('submitWallets').addEventListener('change', e => { if (e.target.matches('input')) e.target.dataset.touched = '1'; });
 $('verdict').addEventListener('change', () => { $('verdict').dataset.touched = '1'; });
 $('recordSub').onchange = e => { $('subFields').hidden = !e.target.checked; };
 
