@@ -489,7 +489,7 @@ function volumeReport(vols, now) {
       tx_count: n.txCount, token_transfers: n.tokenTransfers, first_seen: n.firstSeen, last_activity: n.lastActivity,
       usd_received: n.usdReceived === null || n.usdReceived === undefined ? null : Math.round(n.usdReceived),
       usd_sent: n.usdSent === null || n.usdSent === undefined ? null : Math.round(n.usdSent),
-      tokens: n.tokens.map(t => ({ symbol: t.symbol, received: round(t.received), sent: round(t.sent), balance: round(t.balance) })),
+      tokens: n.tokens.map(t => ({ symbol: t.symbol, received: round(t.received), sent: round(t.sent), balance: round(t.balance), partial: !!t.partial })),
       partial: n.partial, source: n.source,
     })),
   }));

@@ -1,4 +1,5 @@
-// Unit tests for the PURE helpers of src/lib/volume.js: units(), iso(), latest(), hasActivity(), addUsd().
+// Unit tests for the PURE helpers of src/lib/volume.js: units(), iso(), latest(), hasActivity(), addUsd(),
+// stableFlows().
 // No network and no explorer payloads: every input below is a hand-written scalar or a result()-shaped
 // object, never a captured or invented API response.
 //
@@ -6,7 +7,7 @@
 //
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { units, iso, latest, hasActivity, addUsd } from '../src/lib/volume.js';
+import { units, iso, latest, hasActivity, addUsd, stableFlows } from '../src/lib/volume.js';
 
 const close = (actual, expected, rel = 1e-12) =>
   assert.ok(Math.abs(actual - expected) <= Math.abs(expected) * rel, `${actual} !~ ${expected}`);
@@ -230,9 +231,46 @@ describe('addUsd()', () => {
     assert.equal(vol.networks[0].usdReceived, null);
   });
 
+  it('a partial token (capped stablecoin history) also marks the wallet total as a lower bound', () => {
+    const v = addUsd({ networks: [base({ asset: 'ETH', received: 1, tokens: [{ symbol: 'USDT', received: 70, sent: 69, balance: 1, partial: true }] })] }, { ETH: 2000 });
+    assert.equal(v.usdReceived, 2070);
+    assert.equal(v.usdPartial, true);
+  });
+
   it('a partial network marks the wallet total as a lower bound', () => {
     const vol = { networks: [base({ asset: 'TRX', partial: true, tokens: [{ symbol: 'USDT', balance: 0, received: 1e6, sent: 1e6 }] })] };
     addUsd(vol, {});
     assert.equal(vol.usdPartial, true);
+  });
+});
+
+// ------------------------------------------------------------------ stableFlows()
+
+describe('stableFlows()', () => {
+  const me = '0xAbC0000000000000000000000000000000000001';
+  const other = '0x2222222222222222222222222222222222222222';
+  const op = (from, to, value, timestamp = 100, type = 'transfer') => ({ from, to, value, timestamp, type });
+
+  it('sums base units in and out, matching the address case-insensitively', () => {
+    const f = stableFlows([op(other, me.toLowerCase(), '70000000', 300), op(me.toLowerCase(), other, '69320943', 400)], me, 6);
+    assert.equal(f.inn, 70);
+    close(f.out, 69.320943);
+    assert.equal(f.lastTs, 400);
+  });
+
+  it('a transfer to itself counts both ways (gross totals)', () => {
+    const f = stableFlows([op(me, me, '1000000')], me, 6);
+    assert.equal(f.inn, 1);
+    assert.equal(f.out, 1);
+  });
+
+  it('skips non-transfer operations and unusable values', () => {
+    const f = stableFlows([op(other, me, '5000000', 1, 'approve'), op(other, me, 'abc'), op(other, me, '-1'), null], me, 6);
+    assert.equal(f.inn, 0);
+    assert.equal(f.out, 0);
+  });
+
+  it('no operations -> zero totals and no timestamp', () => {
+    assert.deepEqual(stableFlows([], me, 18), { inn: 0, out: 0, lastTs: null });
   });
 });

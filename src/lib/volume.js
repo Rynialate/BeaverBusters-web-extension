@@ -9,7 +9,8 @@
 //   doge  blockcypher              -> blockchair
 //   dash  blockcypher              -> blockchair
 //   bch   blockchain.com           -> blockchair
-//   0x…   ethplorer (Ethereum), binplorer (BNB Chain), blockscout (Polygon, Arbitrum, Optimism, Base)
+//   0x…   ethplorer (Ethereum), binplorer (BNB Chain): native + USDT/USDC/DAI in/out;
+//         blockscout (Polygon, Arbitrum, Base; explorer.optimism.io for Optimism): balances only
 //   trx   tronscan (+ USDT-TRC20 in/out) -> trongrid (+ USDT-TRC20 in/out)
 //   xrp   xrpscan                  -> xrplcluster (rippled)
 //   sol   Solana public RPC (+ USDT/USDC token accounts)
@@ -288,36 +289,73 @@ async function blockcypher(coin, network, asset, address) {
   });
 }
 
-// Ethplorer-style API (Ethereum: ethplorer.io, BNB Chain: binplorer.com). Gives native totals in and out.
+// Ethplorer-style API (Ethereum: ethplorer.io, BNB Chain: binplorer.com). Gives native totals in and
+// out; stablecoin totals come from each contract's transfer history (see stableFlows()).
+const ETHPLORER_HISTORY = 100; // the largest page the free key accepts; a full page marks the totals partial
+
+// Sum one token's transfers into and out of `address`. Each operation's `value` is in base units.
+export function stableFlows(ops, address, decimals) {
+  const me = address.toLowerCase();
+  let inn = 0, out = 0, lastTs = null;
+  for (const op of ops) {
+    if (op?.type && op.type !== 'transfer') continue;
+    const v = units(op?.value, decimals);
+    if (v === null || v < 0) continue;
+    if (String(op.to).toLowerCase() === me) inn += v;
+    if (String(op.from).toLowerCase() === me) out += v;
+    lastTs = Math.max(lastTs || 0, num(op.timestamp) || 0) || lastTs;
+  }
+  return { inn, out, lastTs };
+}
+
 async function ethplorer(host, network, asset, explorerBase, address) {
   const q = `apiKey=freekey`;
   const j = await getJson(`https://${host}/getAddressInfo/${address}?${q}&showETHTotals=true`);
   if (!j || j.error) throw new VolumeError('no_data', j?.error?.message || `${host} returned no data`);
-  const tokens = [];
+  const listed = new Map(); // contract -> { balance, decimals } for the stablecoins the wallet holds
   for (const t of j.tokens || []) {
-    const symbol = stableSymbol(network, t.tokenInfo?.address);
+    const contract = String(t.tokenInfo?.address || '').toLowerCase();
     const dec = decimalsOf(t.tokenInfo?.decimals);
-    if (!symbol || dec === null) continue;
-    const balance = units(t.rawBalance ?? t.balance, dec);
-    let received = t.totalIn !== undefined ? units(t.totalIn, dec) : null;
-    let sent = t.totalOut !== undefined ? units(t.totalOut, dec) : null;
-    // Lifetime inflow can never be below the current balance; if it is, the totals were already
-    // in whole tokens rather than base units.
-    if (received !== null && balance > 0 && received < balance) { received = num(t.totalIn); sent = num(t.totalOut); }
-    tokens.push({ symbol, balance, received, sent });
+    if (stableSymbol(network, contract) && dec !== null) listed.set(contract, { balance: units(t.rawBalance ?? t.balance, dec), decimals: dec });
   }
   const e = j.ETH || j.BNB || {};
   const [nativeTx, tokenOps] = await Promise.all([
     getJson(`https://${host}/getAddressTransactions/${address}?${q}&limit=1&showZeroValues=1`).catch(() => null),
-    getJson(`https://${host}/getAddressHistory/${address}?${q}&limit=1`).catch(() => null),
+    getJson(`https://${host}/getAddressHistory/${address}?${q}&type=transfer&limit=1`).catch(() => null),
   ]);
+  // No token transfer at all (and none held): skip the per-contract history requests.
+  const anyTokenOps = !Array.isArray(tokenOps?.operations) || tokenOps.operations.length > 0 || listed.size > 0;
+  const tokens = [];
+  let capped = false, stableTs = null, failed = 0;
+  for (const [contract, symbol] of anyTokenOps ? Object.entries(STABLES[network] || {}) : []) {
+    let h;
+    try { h = await getJson(`https://${host}/getAddressHistory/${address}?${q}&token=${contract}&type=transfer&limit=${ETHPLORER_HISTORY}`); } catch { h = null; }
+    const held = listed.get(contract);
+    if (!Array.isArray(h?.operations)) {
+      failed++;
+      if (held) tokens.push({ symbol, balance: held.balance, received: null, sent: null, partial: true });
+      continue;
+    }
+    if (!h.operations.length && !held) continue;
+    const dec = held?.decimals ?? decimalsOf(h.operations[0]?.tokenInfo?.decimals);
+    if (dec === null) continue;
+    const f = stableFlows(h.operations, address, dec);
+    const full = h.operations.length >= ETHPLORER_HISTORY;
+    capped ||= full;
+    stableTs = Math.max(stableTs || 0, f.lastTs || 0) || stableTs;
+    tokens.push({ symbol, balance: held ? held.balance : 0, received: f.inn, sent: f.out, partial: full });
+  }
+  const notes = [];
+  if (e.balance === undefined) notes.push(`${host} did not report the native ${asset} figures.`);
+  if (failed) notes.push('Some stablecoin histories could not be loaded; totals are a lower bound.');
+  else if (capped) notes.push(`Only the latest ${ETHPLORER_HISTORY} transfers per stablecoin are counted; totals are a lower bound.`);
   return result({
     network, asset,
     received: num(e.totalIn), sent: num(e.totalOut), balance: num(e.balance),
     txCount: num(j.countTxs),
-    lastActivity: latest(Array.isArray(nativeTx) && nativeTx[0] ? iso(nativeTx[0].timestamp) : null, iso(tokenOps?.operations?.[0]?.timestamp)),
+    lastActivity: latest(Array.isArray(nativeTx) && nativeTx[0] ? iso(nativeTx[0].timestamp) : null, iso(tokenOps?.operations?.[0]?.timestamp), iso(stableTs)),
     tokens, source: host.replace(/^api\./, ''), explorer: `${explorerBase}${address}`,
-    note: e.balance === undefined ? `${host} did not report the native ${asset} figures.` : null,
+    note: notes.join(' ') || null,
   });
 }
 
@@ -351,7 +389,7 @@ const EVM_NETWORKS = [
   { network: 'BNB Chain', run: a => ethplorer('api.binplorer.com', 'BNB Chain', 'BNB', 'https://bscscan.com/address/', a) },
   { network: 'Polygon', run: a => blockscout('polygon.blockscout.com', 'Polygon', 'POL', 'https://polygonscan.com/address/', a) },
   { network: 'Arbitrum', run: a => blockscout('arbitrum.blockscout.com', 'Arbitrum', 'ETH', 'https://arbiscan.io/address/', a) },
-  { network: 'Optimism', run: a => blockscout('optimism.blockscout.com', 'Optimism', 'ETH', 'https://optimistic.etherscan.io/address/', a) },
+  { network: 'Optimism', run: a => blockscout('explorer.optimism.io', 'Optimism', 'ETH', 'https://optimistic.etherscan.io/address/', a) },
   { network: 'Base', run: a => blockscout('base.blockscout.com', 'Base', 'ETH', 'https://basescan.org/address/', a) },
 ];
 
@@ -470,9 +508,9 @@ async function tronViaTronscan(address) {
     tokens: (usdt.nIn || usdt.nOut || usdtRow || usdt.unavailable) ? [{
       symbol: 'USDT',
       balance: usdtRow ? units(usdtRow.balance, decimalsOf(usdtRow.tokenDecimal) ?? 6) : (!usdt.partial ? Math.max(0, usdt.inn - usdt.out) : null),
-      received: usdt.inn, sent: usdt.out, transfersIn: usdt.nIn, transfersOut: usdt.nOut,
+      received: usdt.inn, sent: usdt.out, transfersIn: usdt.nIn, transfersOut: usdt.nOut, partial: !!usdt.partial,
     }] : [],
-    partial: (trxOk && trx.partial) || usdt.partial,
+    partial: trxOk && trx.partial,
     source: 'tronscan.org', explorer, note: notes.join(' '),
   });
 }
@@ -511,9 +549,8 @@ async function tronViaTrongrid(address) {
     tokens: (inn.count || out.count || usdtBal !== undefined) ? [{
       symbol: 'USDT',
       balance: usdtBal !== undefined ? units(usdtBal, 6) : (!partial ? Math.max(0, inn.total - out.total) : null),
-      received: inn.total, sent: out.total, transfersIn: inn.count, transfersOut: out.count,
+      received: inn.total, sent: out.total, transfersIn: inn.count, transfersOut: out.count, partial,
     }] : [],
-    partial,
     source: 'trongrid.io', explorer, note: notes.join(' '),
   });
 }
@@ -685,7 +722,8 @@ export async function usdPrices(assets) {
 }
 
 // Adds usd estimates in place: received/balance of the native asset at today's price, stablecoins at $1.
-// usdPartial marks a total that is only a lower bound (capped histories or failed pages).
+// usdPartial marks a total that is only a lower bound (capped histories or failed pages): a network's
+// `partial` covers its native figures, a token's `partial` covers that token's in and out.
 export function addUsd(vol, prices) {
   const missing = new Set();
   for (const r of vol.networks) {
@@ -704,7 +742,7 @@ export function addUsd(vol, prices) {
   const total = key => (vol.networks.some(r => r[key] !== null && r[key] !== undefined) ? vol.networks.reduce((s, r) => s + (r[key] || 0), 0) : null);
   vol.usdReceived = total('usdReceived');
   vol.usdSent = total('usdSent');
-  vol.usdPartial = vol.networks.some(r => r.partial);
+  vol.usdPartial = vol.networks.some(r => r.partial || r.tokens.some(t => t.partial));
   vol.usdMissing = [...missing]; // assets with flows but no price: their part is not in the USD totals
   vol.pricesAt = new Date().toISOString();
   return vol;
