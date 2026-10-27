@@ -73,7 +73,7 @@ export function i4gError(status, json, endpoint) {
   if (status === 401) return new ApiError(401, 'i4g_bad_key', 'I4G did not accept the key (invalid or revoked). Get a new one with /rotate-api-key in Discord.');
   if (status === 403) {
     if (endpoint === 'submit' && /not approved/i.test(said)) {
-      return new ApiError(403, 'i4g_not_approved', 'Your I4G account is not approved to submit yet: share your scraper code on GitHub with smabryCFRL and DM Sam Mabry (I4G). Checks still work.');
+      return new ApiError(403, 'i4g_not_approved', 'Your I4G account is not approved to submit yet: ask the I4G maintainers for submit approval, as the I4G API instructions describe. Checks still work.');
     }
     return new ApiError(403, 'i4g_key_expired', 'Your I4G key has expired (keys last 30 days). Get a new one with /rotate-api-key in Discord.');
   }

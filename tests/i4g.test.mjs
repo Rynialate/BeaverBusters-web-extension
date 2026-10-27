@@ -75,7 +75,7 @@ describe('i4gError()', () => {
   it('401 bad key; 403 expired vs not approved (submit only)', () => {
     assert.equal(i4gError(401, { error: 'Invalid or revoked API key.' }, 'check').code, 'i4g_bad_key');
     assert.equal(i4gError(403, { error: 'Your API key has expired. Use /rotate-api-key in Discord to get a new one.' }, 'submit').code, 'i4g_key_expired');
-    assert.equal(i4gError(403, { error: 'Your account is not approved to submit. DM Sam Mabry (I4G) …' }, 'submit').code, 'i4g_not_approved');
+    assert.equal(i4gError(403, { error: 'Your account is not approved to submit. Contact the I4G maintainers …' }, 'submit').code, 'i4g_not_approved');
     assert.equal(i4gError(403, { error: 'Your account is not approved to submit.' }, 'check').code, 'i4g_key_expired');
   });
   it('429, 503 and anything else', () => {
