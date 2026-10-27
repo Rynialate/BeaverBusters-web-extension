@@ -33,7 +33,7 @@ textarea { resize: vertical; margin-top: 4px; }
 .msg { min-height: 1em; margin: 8px 0 0; font-size: 12px; }
 .msg.err { color: var(--err-text); } .msg.ok { color: var(--ok-text); }
 .card { margin: 10px 12px 0; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--soft); }
-.card .verdict { display: inline-block; padding: 2px 8px; border-radius: 4px; color: #fff; font-weight: 700; font-size: 12px; }
+.card .verdict, .lookup-i4g .verdict { display: inline-block; padding: 2px 8px; border-radius: 4px; color: #fff; font-weight: 700; font-size: 12px; }
 .card dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0 0; font-size: 12px; }
 .card dt { color: var(--muted); } .card dd { margin: 0; word-break: break-word; }
 .v-scam { background: var(--accent); } .v-suspected { background: var(--warn); } .v-not_scam { background: var(--ok); }
@@ -63,7 +63,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 11px; margin: 4p
 .vol a, #lookupOut a { color: var(--link); }
 .ok-text { color: var(--ok-text); } .err-text { color: var(--err-text); }
 #extraCheck { margin-top: 4px; line-height: 1.5; }
-.lookup-wallet { margin: 0 0 8px; }
+.lookup-wallet, .lookup-i4g { margin: 0 0 8px; }
 .access { margin: 10px 12px 0; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--soft); font-size: 12px; }
 .access p { margin: 0 0 8px; }
 .access.warn { border-color: var(--accent); }

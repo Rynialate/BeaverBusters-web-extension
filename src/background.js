@@ -806,7 +806,8 @@ async function handleExtension(msg) {
       const t = await ext.tabs.get(msg.tabId);
       const st = await getTab(msg.tabId);
       const ws = st?.wallets || [];
-      if (st?.host) await cacheDrop(['dc:' + canonical(st.host), ...ws.map(w => 'wc:' + w.address), ...ws.map(w => 'vol:' + w.address)]);
+      // Both APIs' cached checks: a recheck that fails must not fall back to an old answer.
+      if (st?.host) await cacheDrop(['dc:' + canonical(st.host), 'ic:' + canonical(st.host), ...ws.map(w => 'wc:' + w.address), ...ws.map(w => 'vol:' + w.address)]);
       await updateTab(msg.tabId, cur => (cur ? { ...cur, wallets: (cur.wallets || []).map(({ volume, ...w }) => w) } : cur));
       const state = await refreshTab(msg.tabId, t.url, { fresh: true });
       await ensureContentScript(msg.tabId);
