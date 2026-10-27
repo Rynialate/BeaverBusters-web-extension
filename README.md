@@ -22,6 +22,7 @@ checked against the hub's `GET /me` before it is saved.
 | Claim | Claim or release a domain for 24 h. | `POST/DELETE /domains/{d}/claim` |
 | Look up anything | Domain, URL, wallet, IP, urlscan id, fingerprint. | `GET /lookup` |
 | Key rotation | **Settings → Rotate API key** issues a new key and switches the extension to it. The old key stops working everywhere at once. The new key stays on screen, with a Copy button, until you confirm you saved it, even if the popup closes. | `POST /me/rotate` |
+| I4G switch | **Check & submit with: Hub / I4G** at the top of the popup. With I4G selected, the I4G ScamBusters API (scambuster.intelligenceforgood.org) does everything it offers: the site check (popup, badge and corner widget show *Reported to I4G* active/pending/dead, wallets on record, stale), **Submit to I4G** (site URL without query string plus up to 30 ticked wallets with I4G chain codes; 0x addresses get a network picker preset from the on-chain volume; TON and Avalanche X-Chain are refused, as I4G does not take them), **My I4G submissions** (points per submission, valid/invalid wallets; one request a minute) and site lookups. Wallet lookups, claims, classifying, key rotation, auto-add and auto-classify stay on the hub (the two automations pause while I4G is selected). The I4G key (`sb_` + 32 hex, from `/get-api-key` in Discord) is verified with a read-only check, kept in this browser and sent only to I4G. | `GET /api/check`, `POST /api/submit`, `GET /api/submission_history` (I4G) |
 
 Optional automation (off by default, in **Settings**):
 
@@ -70,6 +71,7 @@ grant it by hand: Firefox `about:addons` → BeaverBusters → Permissions, or C
   Turn it off to check only on demand. Sites in the ignored list get no wallet scan and no widget.
   Explorers and the hub itself are ignored by default.
 - Page HTML leaves the browser only when you click **Classify page**, submit with **Attach page HTML** ticked, or turn on auto-classify.
+- **I4G switch:** with I4G selected, the domains you visit (when "Check every site I visit" is on), the sites you submit and the wallets you tick go to scambuster.intelligenceforgood.org with your I4G key instead of the hub.
 - **On-chain volume** sends wallet addresses (never your hub key or the page) to public explorers: blockchain.com (blockchain.info), Tronscan (apilist.tronscanapi.com), mempool.space, litecoinspace.org, blockcypher.com, blockchair.com, ethplorer.io, binplorer.com, blockscout.com, explorer.optimism.io, trongrid.io, xrpscan.com, xrplcluster.com, the Solana public RPC, koios.rest, tonapi.io, toncenter.com, and coingecko.com for prices. By default this happens only when you open the popup; **Settings → On-chain volume** can make it automatic or turn it off. Results are cached for 30 minutes.
 - Lookups are cached for 10–30 minutes, and the extension backs off when the key's per-minute limit gets low.
 

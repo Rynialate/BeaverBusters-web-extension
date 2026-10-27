@@ -1,4 +1,5 @@
 import { ext, REASON_CODES, HUB_ORIGIN, ACCESS_ORIGINS } from '../lib/settings.js';
+import { i4gChain, i4gDefaultEvmChain, i4gSiteUrl, I4G_EVM_CHAINS, I4G_KEY_RE, I4G_MAX_WALLETS, I4G_KEY_DAYS } from '../lib/i4g.js';
 import '../lib/wallets.js';
 
 const W = globalThis.BBWallets;
@@ -21,7 +22,7 @@ function setMsg(el, text, kind = '') {
 }
 
 function friendly(e) {
-  if (e.code === 'no_host_access') return e.message;
+  if (e.code === 'no_host_access' || /^(i4g_|no_i4g)/.test(e.code || '')) return e.message;
   if (/Receiving end does not exist|Could not establish connection/i.test(e.message || '')) {
     return "The extension's background part is not running, so nothing reached the hub. Reload the extension (chrome://extensions or about:debugging) and try again.";
   }
@@ -129,8 +130,10 @@ function renderStatus() {
     return;
   }
   if (tab.error) {
-    box.innerHTML = `<span class="verdict v-none">Hub error</span><p class="small">${esc(friendly(tab.error))}</p>`;
-    if (tab.error.status === 401) showKeyView('Your saved key stopped working. Enter a new one.');
+    const fromI4g = /^(i4g_|no_i4g)/.test(tab.error.code || '');
+    box.innerHTML = `<span class="verdict v-none">${fromI4g ? 'I4G error' : 'Hub error'}</span><p class="small">${esc(friendly(tab.error))}</p>`;
+    if (tab.error.code === 'no_i4g_key') $('i4gKeyForm').hidden = false;
+    else if (tab.error.status === 401 && !fromI4g) showKeyView('Your saved key stopped working. Enter a new one.');
     return;
   }
   const c = tab.check;
@@ -139,6 +142,7 @@ function renderStatus() {
     return;
   }
   const eff = state.effective;
+  if (c.source === 'i4g') return renderI4gStatus(tab, c, eff);
   const rec = c.known ? c : c.parent;
   let html = `<span class="verdict v-${esc(eff.verdict)}">${esc(VERDICT_TEXT[eff.verdict] || eff.verdict)}</span>`;
   if (eff.parent) html += ` <span class="small">via parent <b>${esc(eff.via)}</b></span>`;
@@ -162,6 +166,24 @@ function renderStatus() {
   }
   if (tab.autoSubmitted?.count) html += `<p class="small muted">Auto-added ${tab.autoSubmitted.count} wallet(s) ${esc(fmtDate(tab.autoSubmitted.at))}.</p>`;
   box.innerHTML = html;
+  if (tab.scope) renderScope(tab.scope);
+}
+
+// Site status from I4G's /api/check (Check & submit with: I4G).
+function renderI4gStatus(tab, c, eff) {
+  let html = `<span class="verdict v-${esc(eff.verdict)}">${esc(eff.label)}</span>`;
+  if (tab.ignored) html += ` <span class="small muted">· ignored site</span>`;
+  if (c.known) {
+    html += `<dl>
+      <dt>Status</dt><dd>${esc(c.status)}</dd>
+      <dt>Wallets</dt><dd>${c.hasWallets ? `On record${c.latestWallet ? ' · newest ' + esc(fmtDate(c.latestWallet)) : ''}` : 'None collected yet'}</dd>
+      <dt>Site key</dt><dd>${esc(c.domain)}</dd>
+    </dl>`;
+    if (c.stale) html += `<p class="small">The newest wallet on record is over 30 days old. Scammers rotate wallets, so fresh ones are worth submitting.</p>`;
+  } else {
+    html += `<p class="small muted">I4G has never received this site. If it is a scam, submit it below.</p>`;
+  }
+  $('status').innerHTML = html;
   if (tab.scope) renderScope(tab.scope);
 }
 
@@ -320,15 +342,37 @@ function renderWalletList() {
 
 // Submit checklist: pre-tick confident addresses not already on record for this site, leaving out
 // wallets that look like an exchange or service. Choices the user made are kept when the list is rebuilt.
+// With I4G selected: wallets I4G does not take are greyed out, and 0x addresses get a network picker
+// (I4G needs one), preset from where the on-chain volume found money.
 function renderChecklist() {
   const ws = state.tab?.wallets || [];
+  const i4gOn = isI4g();
   const prev = new Map([...document.querySelectorAll('#submitWallets input[data-touched]')].map(i => [i.dataset.addr, i.checked]));
+  const picks = touchedPicks('#submitWallets');
   $('submitWallets').innerHTML = ws.map((w, i) => {
-    const touched = prev.has(w.address);
-    const ticked = touched ? prev.get(w.address) : w.confidence === 'high' && !w.result?.onThisDomain && !w.result?.excluded && !w.volume?.service;
-    const note = w.volume?.service ? ` <span class="muted">likely exchange</span>` : '';
-    return `<label class="inline"><input type="checkbox" data-addr="${esc(w.address)}" id="sw${i}" ${ticked ? 'checked' : ''}${touched ? ' data-touched="1"' : ''}><code>${esc(w.address)}</code>${note}</label>`;
+    const accepted = !i4gOn || !!i4gChain(w);
+    const touched = accepted && prev.has(w.address);
+    const auto = i4gOn
+      ? w.confidence === 'high' && !w.volume?.service
+      : w.confidence === 'high' && !w.result?.onThisDomain && !w.result?.excluded && !w.volume?.service;
+    const ticked = accepted && (touched ? prev.get(w.address) : auto);
+    const notes = [];
+    if (w.volume?.service) notes.push('likely exchange');
+    if (!accepted) notes.push(`I4G does not take ${W.chainLabel(w.chain)} addresses`);
+    const pick = i4gOn && /^0x/i.test(w.address) ? chainSelect(w.address, picks.get(w.address.toLowerCase()), i4gDefaultEvmChain(w.volume)) : '';
+    return `<label class="inline"><input type="checkbox" data-addr="${esc(w.address)}" id="sw${i}" ${ticked ? 'checked' : ''}${accepted ? '' : ' disabled'}${touched ? ' data-touched="1"' : ''}><code>${esc(w.address)}</code>${pick}${notes.length ? ` <span class="muted">${esc(notes.join(' · '))}</span>` : ''}</label>`;
   }).join('');
+}
+
+const EVM_NAMES = { eth: 'Ethereum', bsc: 'BNB Chain', matic: 'Polygon', arb: 'Arbitrum', avax: 'Avalanche C', op: 'Optimism' };
+// A user's pick is kept across re-renders; an untouched one follows the latest default.
+function touchedPicks(scope) {
+  return new Map([...document.querySelectorAll(`${scope} select.chainpick[data-touched]`)].map(s => [s.dataset.addr, s.value]));
+}
+function chainSelect(address, picked, fallback) {
+  const value = picked || fallback || 'eth';
+  return `<select class="chainpick" data-addr="${esc(address.toLowerCase())}"${picked ? ' data-touched="1"' : ''} title="Network to report this address on (I4G needs one)" aria-label="Network for ${esc(address)}">${
+    I4G_EVM_CHAINS.map(c => `<option value="${c}"${c === value ? ' selected' : ''}>${EVM_NAMES[c]}</option>`).join('')}</select>`;
 }
 
 function renderScope(s) {
@@ -344,6 +388,107 @@ function renderScope(s) {
     const box = document.querySelector('#reasons input[value="unrealistic_returns"]');
     if (box && !box.dataset.touched) box.checked = true;
   }
+}
+
+const isI4g = () => state?.settings?.api === 'i4g';
+let keyFormOpen = false;
+
+function renderApi() {
+  const on = isI4g();
+  document.body.classList.toggle('api-i4g', on);
+  for (const r of document.querySelectorAll('input[name="api"]')) r.checked = r.value === (on ? 'i4g' : 'hub');
+  $('i4gKeyForm').hidden = !keyFormOpen && !(on && !state.i4g?.hasKey);
+  $('submitSummary').textContent = on ? 'Submit to I4G' : 'Submit to hub';
+  $('submitBtn').textContent = on ? 'Submit to I4G' : 'Submit';
+  $('claimBtn').hidden = on; // claims coordinate work on the hub's record
+  let site = '';
+  try { site = state.tab?.url ? i4gSiteUrl(state.tab.url) : ''; } catch { /* not a URL */ }
+  $('i4gSiteUrl').textContent = site;
+  const k = state.i4g;
+  const age = k?.savedAt ? (Date.now() - new Date(k.savedAt).getTime()) / 86400000 : null;
+  $('i4gKeyState').textContent = k?.hasKey
+    ? `Saved (${k.hint})${k.savedAt ? `, ${ago(k.savedAt)}` : ''}. I4G keys expire ${I4G_KEY_DAYS} days after they are issued${age !== null && age > I4G_KEY_DAYS - 4 ? ', so this one may expire soon' : ''}.`
+    : 'Not set. Needed only when I4G is selected at the top.';
+  $('i4gKeyRemove').hidden = !k?.hasKey;
+  if ($('extraWallets').value.trim()) checkExtra();
+}
+
+for (const r of document.querySelectorAll('input[name="api"]')) {
+  r.addEventListener('change', async () => {
+    if (!r.checked) return;
+    try {
+      state.settings = (await call({ type: 'settings:save', settings: { api: r.value } })).settings;
+      await load();
+      if (r.value === 'i4g' && !state.i4g?.hasKey) $('i4gKeyInput').focus();
+    } catch (e) { setMsg($('settingsMsg'), friendly(e), 'err'); }
+  });
+}
+
+$('i4gKeyForm').onsubmit = e => {
+  e.preventDefault();
+  busy($('i4gKeySave'), async () => {
+    const key = $('i4gKeyInput').value.trim();
+    if (!I4G_KEY_RE.test(key)) { setMsg($('i4gKeyMsg'), 'An I4G key is sb_ followed by 32 lowercase hex characters.', 'err'); return; }
+    setMsg($('i4gKeyMsg'), 'Checking the key with I4G…');
+    try {
+      state.i4g = (await call({ type: 'i4g:setKey', key })).i4g;
+      $('i4gKeyInput').value = '';
+      keyFormOpen = false;
+      setMsg($('i4gKeyMsg'), '');
+      await load();
+      setMsg($('settingsMsg'), 'I4G key saved.', 'ok');
+    } catch (err) { setMsg($('i4gKeyMsg'), friendly(err), 'err'); }
+  });
+};
+$('i4gKeyReplace').onclick = () => {
+  keyFormOpen = true;
+  $('i4gKeyForm').hidden = false;
+  $('i4gKeyForm').scrollIntoView({ block: 'nearest' });
+  $('i4gKeyInput').focus();
+};
+$('i4gKeyRemove').onclick = async () => {
+  if (!confirm('Remove the I4G key from this browser?')) return;
+  try {
+    state.i4g = (await call({ type: 'i4g:clearKey' })).i4g;
+    await load();
+  } catch (e) { setMsg($('settingsMsg'), friendly(e), 'err'); }
+};
+
+// ---------- I4G submission history (one request a minute) ----------
+
+let histPage = 1, histPages = 1;
+$('historyBox').addEventListener('toggle', () => { if ($('historyBox').open && !$('histOut').dataset.loaded) loadHistory(1); });
+$('histPrev').onclick = () => loadHistory(histPage - 1);
+$('histNext').onclick = () => loadHistory(histPage + 1);
+
+async function loadHistory(page) {
+  if (page < 1 || page > histPages) return;
+  $('histOut').textContent = 'Loading…';
+  try {
+    const { history: h } = await call({ type: 'i4g:history', page });
+    histPage = Number(h.page) || page;
+    histPages = Math.max(1, Number(h.total_pages) || 1);
+    $('histOut').dataset.loaded = '1';
+    $('histPage').textContent = `Page ${histPage} of ${histPages} · ${Number(h.total_submissions) || 0} submission(s)`;
+    $('histPrev').disabled = histPage <= 1;
+    $('histNext').disabled = histPage >= histPages;
+    const items = Array.isArray(h.submissions) ? h.submissions : [];
+    $('histOut').innerHTML = (items.length
+      ? `<ul class="hist">${items.map(histItem).join('')}</ul>`
+      : '<p class="muted">No scored submissions yet. They appear here after I4G has processed them.</p>')
+      + `<p class="muted">I4G allows one history request a minute${h.cached ? '; this page was loaded in the last minute' : ''}.</p>`;
+  } catch (e) { $('histOut').textContent = friendly(e); }
+}
+
+function histItem(s) {
+  const pts = Number(s?.total_points);
+  const valid = Array.isArray(s?.valid_wallets) ? s.valid_wallets : [];
+  const invalid = Array.isArray(s?.invalid_wallets) ? s.invalid_wallets : [];
+  const ptsText = Number.isFinite(pts) ? `${pts > 0 ? '+' : ''}${pts} pts` : '? pts';
+  return `<li><b>${esc(s?.site_key || s?.site_url_original || '?')}</b> <span class="${pts < 0 ? 'pts-neg' : 'pts-pos'}">${esc(ptsText)}</span><br>`
+    + `<span class="muted">${esc(fmtDate(s?.submitted_ts_utc) || '')} · ${valid.length} valid / ${invalid.length} invalid wallet(s)</span>`
+    + (invalid.length ? `<br><span class="err-text">Invalid: ${esc(invalid.slice(0, 5).map(w => `${w?.chain || '?'} ${String(w?.address || '').slice(0, 14)}…`).join(', '))}</span>` : '')
+    + '</li>';
 }
 
 function renderSettings() {
@@ -378,9 +523,10 @@ async function load() {
   $('keyView').hidden = true;
   $('newKeyView').hidden = true;
   $('mainView').hidden = false;
+  renderSettings();
+  renderApi();
   renderStatus();
   renderWallets();
-  renderSettings();
   renderFooter();
   checkAccess();
   loadVolumes();
@@ -419,24 +565,30 @@ $('claimBtn').onclick = () => busy($('claimBtn'), async () => {
 
 $('reasons').innerHTML = REASON_CODES.map(c => `<label><input type="checkbox" value="${c}">${c.replace(/_/g, ' ')}</label>`).join('');
 $('reasons').addEventListener('change', e => { e.target.dataset.touched = '1'; });
-$('submitWallets').addEventListener('change', e => { if (e.target.matches('input')) e.target.dataset.touched = '1'; });
+$('submitWallets').addEventListener('change', e => { if (e.target.matches('input, select')) e.target.dataset.touched = '1'; });
+$('extraCheck').addEventListener('change', e => { if (e.target.matches('select')) e.target.dataset.touched = '1'; });
 $('verdict').addEventListener('change', () => { $('verdict').dataset.touched = '1'; });
 $('recordSub').onchange = e => { $('subFields').hidden = !e.target.checked; };
 
 // Extra addresses are validated as you type, with the same rules the background enforces on submit.
 const extraTokens = () => $('extraWallets').value.split(/[\s,;]+/).filter(Boolean);
 function checkExtra() {
+  const i4gOn = isI4g();
+  const picks = touchedPicks('#extraCheck');
   const lines = extraTokens().slice(0, 30).map(a => {
     const det = W.detectChain(a);
     const c = det.chain ? W.validateWallet(det.chain, a) : null;
-    return c?.valid
-      ? `<span class="ok-text">✓ ${esc(chainText({ chain: c.chain, address: c.canonical }))}</span> <span class="muted">${esc(c.format)}</span>`
-      : `<span class="err-text">✗ ${esc(c ? c.errors[0] : `${a.slice(0, 24)}… is not a recognised wallet address.`)}</span>`;
+    if (!c?.valid) return `<span class="err-text">✗ ${esc(c ? c.errors[0] : `${a.slice(0, 24)}… is not a recognised wallet address.`)}</span>`;
+    if (i4gOn && !i4gChain({ address: c.canonical, chain: c.chain })) return `<span class="err-text">✗ I4G does not take ${esc(W.chainLabel(c.chain))} addresses: ${esc(a.slice(0, 24))}…</span>`;
+    const pick = i4gOn && /^0x/i.test(c.canonical) ? chainSelect(c.canonical, picks.get(c.canonical.toLowerCase())) : '';
+    return `<span class="ok-text">✓ ${esc(chainText({ chain: c.chain, address: c.canonical }))}</span> <span class="muted">${esc(c.format)}</span>${pick}`;
   });
   $('extraCheck').innerHTML = lines.join('<br>');
   return lines.every(l => l.includes('ok-text'));
 }
-$('extraWallets').addEventListener('input', checkExtra);
+$('extraWallets').addEventListener('input', () => {
+  if (checkExtra() && $('submitMsg').classList.contains('err')) setMsg($('submitMsg'), ''); // the problem was fixed
+});
 
 $('submitForm').onsubmit = e => {
   e.preventDefault();
@@ -449,6 +601,21 @@ $('submitForm').onsubmit = e => {
       ...[...document.querySelectorAll('#submitWallets input:checked')].map(i => i.dataset.addr),
       ...extraTokens(),
     ];
+    if (isI4g()) {
+      if (wallets.length > I4G_MAX_WALLETS) { setMsg($('submitMsg'), `I4G takes at most ${I4G_MAX_WALLETS} wallets per submission; ${wallets.length} are selected.`, 'err'); return; }
+      const chains = Object.fromEntries([...document.querySelectorAll('#submitWallets select.chainpick, #extraCheck select.chainpick')].map(s => [s.dataset.addr, s.value]));
+      setMsg($('submitMsg'), 'Submitting to I4G…');
+      try {
+        const { result } = await call({ type: 'tab:submit', tabId, form: { wallets, chains } });
+        setMsg($('submitMsg'), result?.status === 'duplicate'
+          ? 'I4G already has this exact submission (duplicate); nothing new was queued.'
+          : `Queued at I4G: ${result?.wallet_count ?? wallets.length} wallet(s)${result?.submission_id ? `, submission ${String(result.submission_id).slice(0, 8)}…` : ''}. Points appear under "My I4G submissions" once it is processed.`, 'ok');
+        $('extraWallets').value = '';
+        $('extraCheck').innerHTML = '';
+        await load();
+      } catch (err) { setMsg($('submitMsg'), friendly(err), 'err'); }
+      return;
+    }
     const form = {
       verdict: $('verdict').value,
       reasons: [...document.querySelectorAll('#reasons input:checked')].map(i => i.value),
@@ -489,10 +656,13 @@ $('lookupForm').onsubmit = e => {
   if (!q) return;
   const seq = ++lookupSeq;
   $('lookupOut').textContent = 'Searching…';
-  call({ type: 'lookup', q }).then(({ result, wallet, invalid, wantVolume }) => {
+  call({ type: 'lookup', q }).then(({ result, wallet, invalid, wantVolume, i4g }) => {
     if (seq !== lookupSeq) return; // a newer search replaced this one
     const head = [];
     if (invalid) head.push(`<p class="err-text">${esc(invalid)}</p>`);
+    if (i4g) head.push(i4g.error
+      ? `<p class="small"><b>I4G:</b> ${esc(friendly(i4g.error))}</p>`
+      : `<div class="lookup-i4g"><span class="verdict v-${esc(i4g.effective.verdict)}">${esc(i4g.effective.label)}</span> <span class="small">${esc(i4g.check.domain)}${i4g.check.known ? ` · ${esc(i4g.check.status)} · ${i4g.check.hasWallets ? 'wallets on record' : 'no wallets yet'}${i4g.check.stale ? ' (stale)' : ''}` : ''}</span></div>`);
     // <div>s, not <p>/<span>: volumeHtml returns a <div>, which a <p> cannot contain.
     if (wallet) head.push(`<div class="lookup-wallet"><span class="ok-text">✓ ${esc(chainText(wallet))}</span> <span class="muted">${esc(wallet.format)}</span><div id="lookupVol">${wantVolume ? volumeHtml({ loading: true }) : ''}</div></div>`);
     const groups = (Array.isArray(result) ? result : []).filter(g => g.results?.length);

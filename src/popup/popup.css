@@ -68,3 +68,16 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 11px; margin: 4p
 .access p { margin: 0 0 8px; }
 .access.warn { border-color: var(--accent); }
 .access button { width: 100%; font-weight: 600; }
+
+/* API switch (hub / I4G) */
+.apiswitch { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--soft); font-size: 12px; }
+.apiswitch label { display: inline-flex; align-items: center; gap: 4px; margin: 0; font-weight: 600; cursor: pointer; }
+.i4gkey .row input { flex: 1; }
+.i4g-only { display: none; }
+body.api-i4g .i4g-only { display: block; }
+body.api-i4g .hub-only { display: none; }
+.chainpick { margin-left: 6px; font-size: 11px; padding: 1px 4px; width: auto; }
+.hist-nav { justify-content: space-between; align-items: center; }
+.hist li { padding: 5px 0; border-top: 1px solid var(--line); list-style: none; }
+.hist { margin: 6px 0 0; padding: 0; }
+.pts-pos { color: var(--ok-text); font-weight: 600; } .pts-neg { color: var(--err-text); font-weight: 600; }
