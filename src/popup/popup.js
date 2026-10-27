@@ -202,6 +202,7 @@ function walletTags(w) {
 function insightTags(v) {
   if (!v || v.loading) return '';
   let t = '';
+  if (v.txCount > 0) t += `<span class="tag t-grey" title="${esc(txBreakdown(v))}">${esc(fmtCount(v.txCount))}${v.txCountPartial ? '+' : ''} txs</span>`;
   if (v.service) t += `<span class="tag t-info" title="${esc(serviceText(v.service))}">likely exchange</span>`;
   if (v.tags?.some(x => x.risky)) t += `<span class="tag t-scam">explorer: ${esc(v.tags.find(x => x.risky).label)}</span>`;
   if (v.poisoning?.length) t += `<span class="tag t-warn">address poisoning</span>`;
@@ -219,10 +220,16 @@ function fmtAmount(n) {
 const fmtUsd = n => '$' + Math.round(n).toLocaleString();
 const fmtUsdShort = n => (n >= 1e9 ? `$${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : fmtUsd(n));
 const shortAddr = a => (a.length > 14 ? `${a.slice(0, 8)}…${a.slice(-4)}` : a);
+const fmtCount = n => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n.toLocaleString());
+
+// "Ethereum: 14 · BNB Chain: 100+ transactions"
+function txBreakdown(v) {
+  return v.networks.filter(n => Number.isFinite(n.txCount)).map(n => `${n.network}: ${n.txCount.toLocaleString()}${n.txCountPartial ? '+' : ''}`).join(' · ') + ' transactions';
+}
 
 function serviceText(s) {
   return s.reasons.map(r => (r.kind === 'tag' ? `tagged “${r.label}” on ${r.source}`
-    : r.kind === 'tx_count' ? `${r.value.toLocaleString()} transactions`
+    : r.kind === 'tx_count' ? `${r.value.toLocaleString()}${r.partial ? '+' : ''} transactions`
     : r.kind === 'balance_usd' ? `holds ≈ ${fmtUsdShort(r.value)}` : `≈ ${fmtUsdShort(r.value)} received`)).join(' · ');
 }
 
@@ -272,7 +279,8 @@ function volumeHtml(v) {
     if (n.received !== null) bits.push(`in ${fmtAmount(n.received)}${np} ${n.asset}`);
     if (n.sent !== null) bits.push(`out ${fmtAmount(n.sent)}${np}`);
     if (n.balance !== null) bits.push(`balance ${fmtAmount(n.balance)} ${n.asset}`);
-    if (n.txCount !== null) bits.push(`${n.txCount.toLocaleString()}${n.partial ? '+' : ''} txs`);
+    if (n.txCount !== null) bits.push(`${n.txCount.toLocaleString()}${n.txCountPartial ? '+' : ''} txs`);
+    if (n.tokenTransfers > 0) bits.push(`${n.tokenTransfers.toLocaleString()}${n.tokenTransfersPartial ? '+' : ''} token transfers`);
     if (n.senders > 0) bits.push(`${n.senders.toLocaleString()}${n.sendersPartial ? '+' : ''} sender${n.senders === 1 && !n.sendersPartial ? '' : 's'}`);
     if (n.lastActivity) bits.push(`last active ${ago(n.lastActivity)}`);
     let line = `<b>${esc(n.network)}</b> ${esc(bits.join(' · '))}`;
@@ -291,6 +299,8 @@ function volumeHtml(v) {
   if (v.errors?.length) {
     // One line per kind of failure, naming the networks it affected.
     const why = e => (e.code === 'unsupported' ? 'no explorer for this chain' : e.code === 'skipped' ? 'too many addresses on this page'
+      : e.code === 'etherscan_plan' ? 'not in your Etherscan plan' : e.code === 'etherscan_key' ? 'Etherscan refused the key'
+      : e.code === 'etherscan_error' ? 'Etherscan error'
       : e.code === 'network' ? 'explorer unreachable' : e.code === 'rate_limited' ? 'explorer rate limit, retrying shortly'
       : e.code === 'timeout' ? 'explorer timed out' : /^http_/.test(e.code) ? `explorer error ${e.code.slice(5)}` : 'explorer error');
     const groups = new Map();
@@ -687,13 +697,37 @@ $('lookupForm').onsubmit = e => {
 
 for (const el of document.querySelectorAll('[data-set]')) {
   el.addEventListener('change', async () => {
-    const value = el.type === 'checkbox' ? el.checked : el.value;
+    const key = el.dataset.set;
+    const value = el.type === 'checkbox' ? el.checked : el.type === 'number' ? (el.value === '' ? 0 : Math.max(0, Number(el.value) || 0)) : el.value.trim();
     try {
-      state.settings = (await call({ type: 'settings:save', settings: { [el.dataset.set]: value } })).settings;
+      state.settings = (await call({ type: 'settings:save', settings: { [key]: value } })).settings;
       syncVolumeOption();
+      if (key === 'etherscanKey') return etherscanSaved(value);
+      if (key === 'exchangeTxs' || key === 'exchangeUsd') {
+        setMsg($('limitsMsg'), 'Saved. Wallets are flagged with the new limits.', 'ok');
+        return loadVolumes(); // the background re-applies the limits to the figures it has
+      }
       setMsg($('settingsMsg'), 'Saved. Applies to pages loaded from now on.', 'ok');
     } catch (e) { setMsg($('settingsMsg'), friendly(e), 'err'); }
   });
+}
+
+// A new Etherscan key: check it, then read this page's 0x wallets again.
+async function etherscanSaved(key) {
+  const msg = $('etherscanMsg');
+  if (!key) setMsg(msg, 'Etherscan key removed: 0x wallets use Ethplorer, Binplorer and Blockscout again.', 'ok');
+  else {
+    setMsg(msg, 'Checking the key with Etherscan…');
+    try {
+      await call({ type: 'etherscan:verify' });
+      setMsg(msg, 'Etherscan accepted the key. 0x wallets are read from Etherscan where your plan covers the chain.', 'ok');
+    } catch (e) {
+      setMsg(msg, e.code === 'etherscan_key'
+        ? 'Saved, but Etherscan did not accept this key. Check it on etherscan.io; a new key can take a few minutes to start working.'
+        : `Saved, but the key could not be checked: ${friendly(e)}`, 'err');
+    }
+  }
+  return loadVolumes();
 }
 
 $('saveIgnore').onclick = async () => {

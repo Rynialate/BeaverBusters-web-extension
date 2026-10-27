@@ -1,5 +1,5 @@
 // Unit tests for the PURE helpers of src/lib/volume.js: units(), iso(), latest(), hasActivity(), addUsd(),
-// stableFlows(), analyzeFlows(), utxoFlows(), walletInsights().
+// stableFlows(), analyzeFlows(), utxoFlows(), walletInsights(), etherscanResult(), etherscanSummary().
 // No network and no explorer payloads: every input below is a hand-written scalar or a result()-shaped
 // object, never a captured or invented API response.
 //
@@ -7,7 +7,7 @@
 //
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { units, iso, latest, hasActivity, addUsd, stableFlows, analyzeFlows, utxoFlows, walletInsights, SERVICE_TX_COUNT, SERVICE_BALANCE_USD } from '../src/lib/volume.js';
+import { units, iso, latest, hasActivity, addUsd, stableFlows, analyzeFlows, utxoFlows, walletInsights, etherscanResult, etherscanSummary, EXCHANGE_TXS, EXCHANGE_USD } from '../src/lib/volume.js';
 
 const close = (actual, expected, rel = 1e-12) =>
   assert.ok(Math.abs(actual - expected) <= Math.abs(expected) * rel, `${actual} !~ ${expected}`);
@@ -351,23 +351,51 @@ describe('utxoFlows()', () => {
 // ------------------------------------------------------------------ walletInsights()
 
 describe('walletInsights()', () => {
-  it('a quiet wallet is not a service, and senders are summed over networks', () => {
+  it('a quiet wallet is not a likely exchange, and senders are summed over networks', () => {
     const v = walletInsights({ networks: [base({ txCount: 40, senders: 12 }), base({ txCount: 3, senders: 2, sendersPartial: true })], usdReceived: 9000 });
     assert.equal(v.service, null);
     assert.equal(v.senders, 14);
     assert.equal(v.sendersPartial, true);
   });
-  it('an explorer name tag marks a service; a scam tag does not, and is kept as risky', () => {
+  it('an explorer name tag marks a likely exchange; a scam tag does not, and is kept as risky', () => {
     const ex = walletInsights({ networks: [base({ label: 'Binance-Hot 3', source: 'tronscan.org', network: 'Tron' })] });
     assert.deepEqual(ex.service.reasons, [{ kind: 'tag', label: 'Binance-Hot 3', source: 'tronscan.org' }]);
     const bad = walletInsights({ networks: [base({ label: 'Fake_Phishing123', source: 'tronscan.org' })] });
     assert.equal(bad.service, null);
     assert.equal(bad.tags[0].risky, true);
   });
-  it('very high transaction count or balance marks a service', () => {
-    assert.equal(walletInsights({ networks: [base({ txCount: SERVICE_TX_COUNT })] }).service.reasons[0].kind, 'tx_count');
-    assert.equal(walletInsights({ networks: [base({ usdBalance: SERVICE_BALANCE_USD })] }).service.reasons[0].kind, 'balance_usd');
-    assert.equal(walletInsights({ networks: [base({ txCount: SERVICE_TX_COUNT - 1, usdBalance: SERVICE_BALANCE_USD - 1 })] }).service, null);
+  it('defaults: 1,000 transactions or $1,000,000 received or held', () => {
+    assert.equal(EXCHANGE_TXS, 1000);
+    assert.equal(EXCHANGE_USD, 1e6);
+    assert.deepEqual(walletInsights({ networks: [base({ txCount: 1000 })] }).service.reasons, [{ kind: 'tx_count', value: 1000, partial: false }]);
+    assert.equal(walletInsights({ networks: [base({ txCount: 999, usdBalance: 999999 })], usdReceived: 999999 }).service, null);
+    assert.equal(walletInsights({ networks: [base({})], usdReceived: 1e6 }).service.reasons[0].kind, 'received_usd');
+    assert.equal(walletInsights({ networks: [base({ usdBalance: 1e6 })], usdReceived: null }).service.reasons[0].kind, 'balance_usd');
+  });
+  it('transactions are summed over networks (a 0x wallet on several chains)', () => {
+    const v = walletInsights({ networks: [base({ txCount: 600 }), base({ txCount: 500, txCountPartial: true }), base({})] });
+    assert.equal(v.txCount, 1100);
+    assert.equal(v.txCountPartial, true);
+    assert.deepEqual(v.service.reasons, [{ kind: 'tx_count', value: 1100, partial: true }]);
+  });
+  it('a lower-bound count below the limit does not flag', () => {
+    assert.equal(walletInsights({ networks: [base({ txCount: 100, txCountPartial: true })] }).service, null);
+  });
+  it('limits come from Settings; 0 turns one off', () => {
+    const w = () => ({ networks: [base({ txCount: 75, usdBalance: 500 })], usdReceived: 2000 });
+    assert.equal(walletInsights(w(), { txs: 50, usd: 0 }).service.reasons[0].kind, 'tx_count');
+    assert.equal(walletInsights(w(), { txs: 0, usd: 1000 }).service.reasons[0].kind, 'received_usd');
+    assert.equal(walletInsights(w(), { txs: 0, usd: 0 }).service, null);
+  });
+  it('no network with a count -> txCount null', () => {
+    const v = walletInsights({ networks: [base({})] });
+    assert.equal(v.txCount, null);
+    assert.equal(v.txCountPartial, false);
+  });
+  it('running it again with other limits replaces the flag', () => {
+    const v = { networks: [base({ txCount: 300 })] };
+    assert.equal(walletInsights(v, { txs: 200, usd: 0 }).service.reasons[0].kind, 'tx_count');
+    assert.equal(walletInsights(v, { txs: 500, usd: 0 }).service, null);
   });
   it('no network with a transfer list -> senders null', () => {
     assert.equal(walletInsights({ networks: [base({})] }).senders, null);
@@ -375,5 +403,88 @@ describe('walletInsights()', () => {
   it('poisoning is collected with the network it was seen on', () => {
     const v = walletInsights({ networks: [base({ network: 'Ethereum', poisoning: [{ fake: 'f', real: 'r' }] })] });
     assert.deepEqual(v.poisoning, [{ fake: 'f', real: 'r', network: 'Ethereum' }]);
+  });
+});
+
+// ------------------------------------------------------------------ etherscanResult()
+
+describe('etherscanResult()', () => {
+  it('status "1" -> the result; an empty list -> []', () => {
+    assert.deepEqual(etherscanResult({ status: '1', message: 'OK', result: [{ hash: 'h' }] }), [{ hash: 'h' }]);
+    assert.equal(etherscanResult({ status: '1', message: 'OK', result: '12345' }), '12345');
+    assert.deepEqual(etherscanResult({ status: '0', message: 'No transactions found', result: [] }), []);
+  });
+  it('errors arrive as status "0" with the reason in result', () => {
+    const code = j => { try { etherscanResult(j); return 'none'; } catch (e) { return e.code; } };
+    assert.equal(code({ status: '0', message: 'NOTOK', result: 'Invalid API Key' }), 'etherscan_key');
+    assert.equal(code({ status: '0', message: 'NOTOK', result: 'Missing/Invalid API Key' }), 'etherscan_key');
+    assert.equal(code({ status: '0', message: 'NOTOK', result: 'Free API access is not supported for this chain. Please upgrade your api plan for full chain coverage.' }), 'etherscan_plan');
+    assert.equal(code({ status: '0', message: 'NOTOK', result: 'Something else broke' }), 'etherscan_error');
+    assert.equal(code(null), 'etherscan_error');
+  });
+  it('rate limits: a per-second limit retries soon, a daily one much later', () => {
+    const at = j => { try { etherscanResult(j); } catch (e) { assert.equal(e.code, 'rate_limited'); return e.retryAt - Date.now(); } return null; };
+    assert.ok(at({ status: '0', message: 'NOTOK', result: 'Max calls per sec rate limit reached (3/sec)' }) < 5000);
+    assert.ok(at({ status: '0', message: 'NOTOK', result: 'Max daily rate limit reached. 100000 calls per day' }) > 3000e3);
+  });
+});
+
+// ------------------------------------------------------------------ etherscanSummary()
+
+describe('etherscanSummary()', () => {
+  const me = '0x' + 'b'.repeat(40), other = '0x' + 'a'.repeat(40), other2 = '0x' + 'c'.repeat(40);
+  const USDT = '0xdac17f958d2ee523a2206206994597c13d831ec7', SPAM = '0x' + '9'.repeat(40);
+  const T = 1767000000; // timestamps are offsets from this (iso() refuses dates before 2009)
+  const tx = (from, to, eth, ts, isError = '0') => ({ from, to, value: String(BigInt(Math.round(eth * 1e6)) * 10n ** 12n), timeStamp: String(T + ts), isError });
+  const tok = (from, to, amount, contract, ts, decimals = 6) => ({ from, to, value: String(Math.round(amount * 10 ** decimals)), contractAddress: contract, tokenDecimal: String(decimals), timeStamp: String(T + ts) });
+
+  it('counts, native in/out with internal transfers, failed transactions skipped', () => {
+    const s = etherscanSummary(me, 'Ethereum', 'ETH', {
+      normal: [tx(me, other, 0.5, 300), tx(other, me, 1, 200), tx(other, me, 9, 250, '1')],
+      internal: [tx(other2, me, 0.25, 280)],
+      tokens: [],
+    });
+    assert.equal(s.txCount, 3);
+    assert.equal(s.txCountPartial, false);
+    close(s.received, 1.25);
+    close(s.sent, 0.5);
+    assert.equal(s.partial, false);
+    assert.equal(s.lastActivity, new Date((T + 300) * 1000).toISOString());
+    assert.equal(s.firstSeen, new Date((T + 200) * 1000).toISOString());
+    assert.equal(s.senders, 2);
+  });
+
+  it('stablecoins by contract only; balance = in - out when the whole history was read', () => {
+    const s = etherscanSummary(me, 'Ethereum', 'ETH', {
+      normal: [], internal: [],
+      tokens: [tok(other, me, 70, USDT, 10), tok(me, other2, 69.320943, USDT, 20), tok(other, me, 5000, SPAM, 30)],
+    });
+    assert.equal(s.tokens.length, 1);
+    assert.equal(s.tokens[0].symbol, 'USDT');
+    close(s.tokens[0].received, 70);
+    close(s.tokens[0].sent, 69.320943);
+    close(s.tokens[0].balance, 0.679057, 1e-9);
+    assert.equal(s.tokenTransfers, 3);
+    assert.equal(s.tokens[0].partial, false);
+  });
+
+  it('a full page (1,000) makes counts and totals lower bounds', () => {
+    const many = Array.from({ length: 1000 }, (_, i) => tx(other, me, 0.001, 1000 + i));
+    const s = etherscanSummary(me, 'Ethereum', 'ETH', { normal: many, internal: [], tokens: Array.from({ length: 1000 }, (_, i) => tok(other, me, 1, USDT, 5000 + i)) });
+    assert.equal(s.txCount, 1000);
+    assert.equal(s.txCountPartial, true);
+    assert.equal(s.partial, true);
+    assert.equal(s.tokenTransfersPartial, true);
+    assert.equal(s.tokens[0].balance, null); // asked for separately
+    assert.equal(s.tokens[0].partial, true);
+    assert.equal(s.firstSeen, null);
+    assert.equal(s.sendersPartial, true);
+  });
+
+  it('a failed list is marked, not read as empty', () => {
+    const s = etherscanSummary(me, 'Ethereum', 'ETH', { normal: [tx(other, me, 1, 10)], internal: null, tokens: null });
+    assert.equal(s.partial, true);
+    assert.equal(s.tokenTransfers, null);
+    assert.equal(s.sendersPartial, true);
   });
 });
