@@ -50,6 +50,18 @@
       <button id="recheck" class="icon" title="Recheck this page">↻</button>
     </header>
 
+    <div class="apiswitch" role="radiogroup" aria-label="API for site checks, submissions and submission history">
+      <span class="small muted">Check &amp; submit with</span>
+      <label title="ScamBusters hub (sdb.netherportal3.com)"><input type="radio" name="api" value="hub"> Hub</label>
+      <label title="I4G ScamBusters (scambuster.intelligenceforgood.org): site check, submit, submission history"><input type="radio" name="api" value="i4g"> I4G</label>
+    </div>
+    <form id="i4gKeyForm" class="pad i4gkey" hidden>
+      <label for="i4gKeyInput">I4G API key</label>
+      <div class="row"><input id="i4gKeyInput" type="password" placeholder="sb_…" autocomplete="off" spellcheck="false" maxlength="40"><button type="submit" id="i4gKeySave">Verify and save</button></div>
+      <p class="muted small">From <code>/get-api-key</code> in the ScamBusters Discord. Kept in this browser and sent only to scambuster.intelligenceforgood.org. Wallet lookups, claims and classifying keep using your hub key.</p>
+      <p id="i4gKeyMsg" class="msg" role="status"></p>
+    </form>
+
     <div id="status" class="card"></div>
 
     <div class="pad actions">
@@ -64,40 +76,53 @@
     </details>
 
     <details id="submitBox" class="sect">
-      <summary>Submit to hub</summary>
+      <summary id="submitSummary">Submit to hub</summary>
       <form id="submitForm" class="pad">
-        <label for="verdict">Verdict</label>
-        <select id="verdict">
-          <option value="scam">Scam</option>
-          <option value="suspected">Suspected</option>
-          <option value="not_scam">Not a scam</option>
-          <option value="out_of_scope">Out of scope</option>
-          <option value="">Leave unchanged</option>
-        </select>
+        <p class="i4g-only small muted">I4G receives the site URL <code id="i4gSiteUrl"></code> (no query string) and the ticked wallets, up to 30, nothing else. Submitting needs I4G approval for your account.</p>
+        <div class="hub-only">
+          <label for="verdict">Verdict</label>
+          <select id="verdict">
+            <option value="scam">Scam</option>
+            <option value="suspected">Suspected</option>
+            <option value="not_scam">Not a scam</option>
+            <option value="out_of_scope">Out of scope</option>
+            <option value="">Leave unchanged</option>
+          </select>
 
-        <label>Reasons</label>
-        <div id="reasons" class="chips"></div>
-        <input id="reasonDetail" placeholder="Detail, e.g. 300% in 7 days" maxlength="300">
+          <label>Reasons</label>
+          <div id="reasons" class="chips"></div>
+          <input id="reasonDetail" placeholder="Detail, e.g. 300% in 7 days" maxlength="300">
+        </div>
 
         <label>Wallets to include</label>
         <div id="submitWallets" class="checklist"></div>
         <textarea id="extraWallets" rows="2" placeholder="Extra addresses, one per line" spellcheck="false"></textarea>
         <div id="extraCheck" class="small" aria-live="polite"></div>
 
-        <label for="comment">Comment</label>
-        <textarea id="comment" rows="2" maxlength="2000"></textarea>
+        <div class="hub-only">
+          <label for="comment">Comment</label>
+          <textarea id="comment" rows="2" maxlength="2000"></textarea>
 
-        <label class="inline"><input id="includeHtml" type="checkbox" checked> Attach page HTML as evidence</label>
-        <label class="inline"><input id="includeVolume" type="checkbox" checked> Include on-chain volume of the selected wallets</label>
-        <label class="inline"><input id="recordSub" type="checkbox"> I reported it — record a submission</label>
-        <div id="subFields" hidden>
-          <input id="platform" placeholder="Platform (default scambusters)">
-          <input id="externalId" placeholder="Report ID (optional)">
+          <label class="inline"><input id="includeHtml" type="checkbox" checked> Attach page HTML as evidence</label>
+          <label class="inline"><input id="includeVolume" type="checkbox" checked> Include on-chain volume of the selected wallets</label>
+          <label class="inline"><input id="recordSub" type="checkbox"> I reported it — record a submission</label>
+          <div id="subFields" hidden>
+            <input id="platform" placeholder="Platform (default scambusters)">
+            <input id="externalId" placeholder="Report ID (optional)">
+          </div>
         </div>
 
         <button type="submit" class="primary" id="submitBtn">Submit</button>
         <p id="submitMsg" class="msg" role="status"></p>
       </form>
+    </details>
+
+    <details id="historyBox" class="sect i4g-only">
+      <summary>My I4G submissions</summary>
+      <div class="pad">
+        <div class="row hist-nav"><button id="histPrev" type="button">‹ Newer</button><span id="histPage" class="small muted"></span><button id="histNext" type="button">Older ›</button></div>
+        <div id="histOut" class="small" aria-live="polite"></div>
+      </div>
     </details>
 
     <details class="sect">
@@ -116,6 +141,7 @@
         <label class="inline"><input type="checkbox" data-set="walletScan"> Find and check wallet addresses on pages</label>
         <label class="inline"><input type="checkbox" data-set="autoSubmitWallets"> Auto-add new wallets to sites the hub already flags</label>
         <label class="inline"><input type="checkbox" data-set="autoScope"> Auto-classify unknown sites that show wallets (sends page HTML)</label>
+        <p class="i4g-only muted small">With I4G selected, auto-add and auto-classify are paused: they act on the hub's record of the site.</p>
         <label for="widgetMode">Corner widget</label>
         <select id="widgetMode" data-set="widget">
           <option value="alerts">Only for scams or wallets</option>
@@ -136,6 +162,9 @@
         <textarea id="ignoreList" rows="4" spellcheck="false"></textarea>
         <button id="saveIgnore">Save ignored sites</button>
         <p id="settingsMsg" class="msg" role="status"></p>
+        <label>I4G API key</label>
+        <p id="i4gKeyState" class="muted small"></p>
+        <div class="row"><button id="i4gKeyReplace" type="button">Add or replace</button><button id="i4gKeyRemove" type="button">Remove</button></div>
         <label>API key</label>
         <p class="muted small">Rotating issues a new key and immediately disables the current one everywhere.</p>
         <button id="rotateKey" type="button">Rotate API key</button>

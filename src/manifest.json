@@ -42,7 +42,7 @@
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src https://sdb.netherportal3.com https://mempool.space https://litecoinspace.org https://api.blockcypher.com https://api.blockchair.com https://api.ethplorer.io https://api.binplorer.com https://*.blockscout.com https://explorer.optimism.io https://api.trongrid.io https://api.xrpscan.com https://xrplcluster.com https://api.mainnet-beta.solana.com https://api.koios.rest https://tonapi.io https://toncenter.com https://api.coingecko.com https://blockchain.info https://api.blockchain.info https://apilist.tronscanapi.com"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src https://sdb.netherportal3.com https://mempool.space https://litecoinspace.org https://api.blockcypher.com https://api.blockchair.com https://api.ethplorer.io https://api.binplorer.com https://*.blockscout.com https://explorer.optimism.io https://api.trongrid.io https://api.xrpscan.com https://xrplcluster.com https://api.mainnet-beta.solana.com https://api.koios.rest https://tonapi.io https://toncenter.com https://api.coingecko.com https://blockchain.info https://api.blockchain.info https://apilist.tronscanapi.com https://scambuster.intelligenceforgood.org"
   },
   "background": {
     "service_worker": "background.js",

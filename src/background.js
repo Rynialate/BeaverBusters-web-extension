@@ -1,9 +1,11 @@
 // Background worker (Chrome service worker / Firefox event page).
-// Owns the API key and every hub call; content scripts and the popup talk to it by message.
+// Owns the API keys and every hub and I4G call; content scripts and the popup talk to it by message.
+// Settings → API picks where site checks, submissions and submission history go: the hub, or I4G.
 
 import { hub, limits, ApiError, CLIENT_SOURCE } from './lib/api.js';
 import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES, HUB_ORIGIN } from './lib/settings.js';
 import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, setTronscanKey, SUPPORTED as VOLUME_CHAINS, walletInsights } from './lib/volume.js';
+import { i4g, i4gCheck, i4gVerdict, i4gChain, i4gSiteUrl, I4G_KEY_RE, I4G_MAX_WALLETS, I4G_ORIGIN, I4G_HOST } from './lib/i4g.js';
 import './lib/wallets.js';
 
 const W = globalThis.BBWallets;
@@ -45,6 +47,13 @@ function isCheckable(host) {
   return true;
 }
 
+// A domain or URL typed into the lookup box -> its host; null for anything else.
+function siteOf(q) {
+  if (!q || /\s/.test(q)) return null;
+  const host = hostOf(/^https?:\/\//i.test(q) ? q : 'https://' + q);
+  return host && isCheckable(host) ? canonical(host) : null;
+}
+
 function isIgnored(host, ignore) {
   return ignore.some(d => host === d || host.endsWith('.' + d));
 }
@@ -60,6 +69,9 @@ async function cacheSet(key, data) {
 }
 async function cacheDrop(keys) {
   await session.remove(keys);
+}
+async function cacheDropPrefix(prefix) {
+  await session.remove(Object.keys(await session.get(null)).filter(k => k.startsWith(prefix)));
 }
 
 const tabKey = id => 'tab:' + id;
@@ -136,9 +148,35 @@ async function checkDomain(apiKey, host, { fresh = false } = {}) {
   });
 }
 
+// I4G site check (Settings → API = I4G). Cached apart from the hub's answers. No parent-domain
+// lookup: I4G allows 500 checks an hour.
+async function i4gKey() {
+  return (await ext.storage.local.get('i4gKey')).i4gKey || '';
+}
+
+async function checkDomainI4g(host, { fresh = false } = {}) {
+  const key = await i4gKey();
+  if (!key) throw new ApiError(0, 'no_i4g_key', 'Add your I4G API key to check sites with I4G.');
+  const domain = canonical(host);
+  const ck = 'ic:' + domain;
+  if (!fresh) {
+    const hit = await cacheGet(ck, DOMAIN_TTL);
+    if (hit) return hit;
+  }
+  return once(ck, async () => {
+    const data = i4gCheck(await i4g.check(key, domain), domain);
+    await cacheSet(ck, data);
+    return data;
+  });
+}
+
+const apiOf = settings => (settings.api === 'i4g' ? 'i4g' : 'hub');
+const sourceOf = check => check?.source || 'hub';
+
 // The verdict that drives warnings: the domain's own, else a flagged parent's.
 function effective(check) {
   if (!check) return null;
+  if (check.source === 'i4g') return { ...i4gVerdict(check), via: check.domain, submitted: check.known, source: 'i4g' };
   if (check.known) return { verdict: check.verdict, via: check.domain, submitted: check.submitted };
   if (check.parent?.known) return { verdict: check.parent.verdict, via: check.parent.domain, submitted: check.parent.submitted, parent: true };
   return { verdict: 'not_in_hub', via: check.domain, submitted: false };
@@ -355,14 +393,14 @@ async function paintBadge(tabId, state) {
   let text = '', color = '#0871c3', title = 'BeaverBusters checker';
   if (eff && BADGE[eff.verdict]) {
     [text, color] = BADGE[eff.verdict];
-    title = `${eff.via}: ${eff.verdict.replace('_', ' ')}${eff.submitted ? ' (submitted)' : ''}${eff.parent ? ' — parent domain' : ''}`;
+    title = eff.label ? `${eff.via}: ${eff.label}` : `${eff.via}: ${eff.verdict.replace('_', ' ')}${eff.submitted ? ' (submitted)' : ''}${eff.parent ? ' — parent domain' : ''}`;
   } else if (state?.wallets?.length) {
     text = String(state.wallets.length);
     title = `${state.wallets.length} wallet address(es) on this page; site not in the hub`;
   } else if (eff) {
-    title = `${eff.via}: not in the hub`;
+    title = `${eff.via}: ${eff.label || 'not in the hub'}`;
   }
-  if (state?.error) { text = 'ERR'; color = '#636e72'; title = 'Hub error: ' + state.error.message; }
+  if (state?.error) { text = 'ERR'; color = '#636e72'; title = (/^i4g_|^no_i4g/.test(state.error.code) ? 'I4G error: ' : 'Hub error: ') + state.error.message; }
   try {
     await ext.action.setBadgeText({ tabId, text });
     await ext.action.setBadgeBackgroundColor({ tabId, color });
@@ -387,15 +425,18 @@ async function refreshTab(tabId, url, { fresh = false } = {}) {
   const { apiKey, settings } = await getConfig();
   const host = hostOf(url);
   const checkable = isCheckable(host);
+  const api = apiOf(settings);
   let check, error = null;
   if (apiKey && checkable && (settings.autoCheck || fresh)) {
-    try { check = await checkDomain(apiKey, host, { fresh }); } catch (e) { error = errInfo(e); }
+    try {
+      check = api === 'i4g' ? await checkDomainI4g(host, { fresh }) : await checkDomain(apiKey, host, { fresh });
+    } catch (e) { error = errInfo(e); }
   }
   const state = await updateTab(tabId, prev => {
     const sameHost = prev && prev.host === host;
     return {
       url, host,
-      check: check !== undefined ? check : (sameHost && !fresh ? prev.check : null),
+      check: check !== undefined ? check : (sameHost && !fresh && sourceOf(prev.check) === api ? prev.check : null),
       wallets: sameHost && prev.url === url ? prev.wallets : [],
       scope: sameHost ? prev.scope : null,
       autoSubmitted: sameHost ? prev.autoSubmitted : null,
@@ -417,7 +458,8 @@ ext.tabs.onRemoved.addListener(tabId => session.remove(tabKey(tabId)));
 
 async function maybeAutoSubmit(apiKey, settings, tabId, state) {
   const eff = effective(state.check);
-  if (!settings.autoSubmitWallets || !state.check?.known) return;
+  // Hub only: it acts on the hub's verdict for the site.
+  if (!settings.autoSubmitWallets || !state.check?.known || sourceOf(state.check) !== 'hub') return;
   if (eff.verdict !== 'scam' && eff.verdict !== 'suspected') return;
   // Wallets that look like an exchange or service (when on-chain figures are already known) are left out.
   const fresh = state.wallets.filter(w => w.confidence === 'high' && w.result && !w.result.onThisDomain && !w.result.excluded && !w.volume?.service);
@@ -442,7 +484,7 @@ async function maybeAutoSubmit(apiKey, settings, tabId, state) {
 }
 
 async function maybeAutoScope(apiKey, settings, tabId, state) {
-  if (!settings.autoScope || state.scope || !state.check || state.check.known || state.check.parent?.known) return;
+  if (!settings.autoScope || state.scope || !state.check || sourceOf(state.check) !== 'hub' || state.check.known || state.check.parent?.known) return;
   if (!state.wallets.some(w => w.confidence === 'high')) return;
   if (await cacheGet('sc:' + canonical(state.host), DOMAIN_TTL)) return;
   try {
@@ -523,7 +565,34 @@ function volumeReport(vols, now) {
   };
 }
 
+// I4G takes the site URL and up to 30 wallets with chain codes, nothing else.
+async function submitI4g(tabId, form) {
+  const key = await i4gKey();
+  if (!key) throw new ApiError(0, 'no_i4g_key', 'Add your I4G API key before submitting to I4G.');
+  const state = await getTab(tabId);
+  if (!state?.host || !isCheckable(state.host)) throw new ApiError(0, 'bad_page', 'This page cannot be submitted');
+  const raw = [...new Set((form.wallets || []).map(a => String(a).trim()).filter(Boolean))].slice(0, 500);
+  const bad = raw.filter(a => !describeWallet(a));
+  if (bad.length) throw new ApiError(0, 'invalid_wallet', bad.slice(0, 3).map(whyInvalid).join(' '));
+  const wallets = [...new Map(raw.map(a => describeWallet(a)).map(w => [w.address, w])).values()];
+  const refused = wallets.filter(w => !i4gChain(w));
+  if (refused.length) {
+    throw new ApiError(0, 'i4g_unsupported', `I4G does not accept ${[...new Set(refused.map(w => W.chainLabel(w.chain)))].join(', ')} addresses: untick ${refused.map(w => w.address.slice(0, 14) + '…').join(', ')}.`);
+  }
+  if (wallets.length > I4G_MAX_WALLETS) throw new ApiError(0, 'i4g_too_many', `I4G accepts at most ${I4G_MAX_WALLETS} wallets per submission; ${wallets.length} are selected.`);
+  const payload = {
+    site_url: i4gSiteUrl(state.url),
+    wallets: wallets.map(w => ({ address: w.address, chain: i4gChain(w, form.chains?.[w.address.toLowerCase()]) })),
+  };
+  const res = await i4g.submit(key, payload);
+  // The site is now known to I4G (pending): show that.
+  await cacheDrop(['ic:' + canonical(state.host)]);
+  await refreshTab(tabId, state.url, { fresh: true });
+  return { target: 'i4g', site_url: payload.site_url, ...res };
+}
+
 async function submit(apiKey, tabId, form) {
+  if (apiOf((await getConfig()).settings) === 'i4g') return submitI4g(tabId, form);
   const state = await getTab(tabId);
   if (!state?.host || !isCheckable(state.host)) throw new ApiError(0, 'bad_page', 'This page cannot be submitted');
   const now = new Date().toISOString();
@@ -617,10 +686,26 @@ async function popupState(tabId) {
   if (tabId !== undefined) {
     const t = await ext.tabs.get(tabId).catch(() => null);
     tab = await getTab(tabId);
-    if (t?.url && (!tab || tab.url !== t.url || (!tab.check && tab.checkable))) tab = await refreshTab(tabId, t.url, { fresh: !settings.autoCheck });
+    const otherApi = tab?.check && sourceOf(tab.check) !== apiOf(settings);
+    if (t?.url && (!tab || tab.url !== t.url || otherApi || (!tab.check && tab.checkable))) tab = await refreshTab(tabId, t.url, { fresh: !settings.autoCheck });
     if (tab) tab.title = t?.title || '';
   }
-  return { hasKey: true, me, settings, limits: { ...limits }, tab, effective: effective(tab?.check) };
+  return { hasKey: true, me, settings, limits: { ...limits }, tab, effective: effective(tab?.check), i4g: await i4gKeyStatus() };
+}
+
+async function i4gKeyStatus() {
+  const { i4gKey: key, i4gKeySavedAt: savedAt } = await ext.storage.local.get(['i4gKey', 'i4gKeySavedAt']);
+  return key ? { hasKey: true, hint: `${key.slice(0, 3)}…${key.slice(-4)}`, savedAt: savedAt || null } : { hasKey: false };
+}
+
+// After the API switch: forget every tab's check from the other API, then check the open tabs again.
+async function switchApi() {
+  const all = await session.get(null);
+  const tabs = Object.keys(all).filter(k => k.startsWith('tab:')).map(k => Number(k.slice(4)));
+  await Promise.all(tabs.map(async id => {
+    const t = await ext.tabs.get(id).catch(() => null);
+    if (t?.url) await refreshTab(id, t.url);
+  }));
 }
 
 async function handleContent(msg, sender) {
@@ -688,7 +773,31 @@ async function handleExtension(msg) {
     case 'settings:save': {
       const patch = {};
       for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in msg.settings) patch[k] = msg.settings[k];
-      return { settings: await saveSettings(patch) };
+      if ('api' in patch && !['hub', 'i4g'].includes(patch.api)) delete patch.api;
+      const before = apiOf((await getConfig()).settings);
+      const settings = await saveSettings(patch);
+      if (apiOf(settings) !== before) await switchApi();
+      return { settings };
+    }
+    case 'i4g:setKey': {
+      const key = String(msg.key || '').trim();
+      if (!I4G_KEY_RE.test(key)) throw new ApiError(0, 'i4g_bad_format', 'An I4G key is sb_ followed by 32 lowercase hex characters.');
+      // A read-only check proves the key works (401 invalid or revoked, 403 expired).
+      await i4g.check(key, 'example.com');
+      await ext.storage.local.set({ i4gKey: key, i4gKeySavedAt: new Date().toISOString() });
+      i4g.forget();
+      await cacheDropPrefix('ic:');
+      if (apiOf((await getConfig()).settings) === 'i4g') await switchApi();
+      return { i4g: await i4gKeyStatus() };
+    }
+    case 'i4g:clearKey':
+      await ext.storage.local.remove(['i4gKey', 'i4gKeySavedAt']);
+      i4g.forget();
+      await cacheDropPrefix('ic:');
+      return { i4g: await i4gKeyStatus() };
+    case 'i4g:history': {
+      const page = Math.max(1, Math.floor(Number(msg.page) || 1));
+      return { history: await i4g.history(await i4gKey(), page) };
     }
   }
   if (!apiKey) throw new ApiError(401, 'no_key', 'Enter your API key first');
@@ -697,7 +806,8 @@ async function handleExtension(msg) {
       const t = await ext.tabs.get(msg.tabId);
       const st = await getTab(msg.tabId);
       const ws = st?.wallets || [];
-      if (st?.host) await cacheDrop(['dc:' + canonical(st.host), ...ws.map(w => 'wc:' + w.address), ...ws.map(w => 'vol:' + w.address)]);
+      // Both APIs' cached checks: a recheck that fails must not fall back to an old answer.
+      if (st?.host) await cacheDrop(['dc:' + canonical(st.host), 'ic:' + canonical(st.host), ...ws.map(w => 'wc:' + w.address), ...ws.map(w => 'vol:' + w.address)]);
       await updateTab(msg.tabId, cur => (cur ? { ...cur, wallets: (cur.wallets || []).map(({ volume, ...w }) => w) } : cur));
       const state = await refreshTab(msg.tabId, t.url, { fresh: true });
       await ensureContentScript(msg.tabId);
@@ -727,8 +837,13 @@ async function handleExtension(msg) {
       const invalid = !wallet && W.detectChain(q).chain ? whyInvalid(q) : null;
       const wantVolume = !!wallet && settings.volume !== 'off' && VOLUME_CHAINS.has(wallet.chain);
       if (wantVolume) volumeFor(wallet).catch(() => null); // start now; 'lookup:volume' joins it
-      const result = (await hub.lookup(apiKey, wallet ? wallet.address : q)).data;
-      return { result, wallet, invalid, wantVolume };
+      // With the I4G switch on, a site is also checked with I4G.
+      const site = !wallet && apiOf(settings) === 'i4g' ? siteOf(q) : null;
+      const [result, i4gSite] = await Promise.all([
+        hub.lookup(apiKey, wallet ? wallet.address : q).then(r => r.data),
+        site ? checkDomainI4g(site).then(check => ({ check }), e => ({ error: errInfo(e) })) : null, // cached like page checks
+      ]);
+      return { result, wallet, invalid, wantVolume, i4g: i4gSite && { ...i4gSite, site, effective: i4gSite.check ? effective(i4gSite.check) : null } };
     }
     case 'lookup:volume': {
       const wallet = describeWallet(String(msg.q || '').trim());
@@ -777,9 +892,10 @@ async function rotateKey(apiKey) {
   return { rotated: true, token, me };
 }
 
-async function hasHubAccess() {
-  try { return await ext.permissions.contains({ origins: [HUB_ORIGIN] }); } catch { return true; }
+async function hasAccess(origin) {
+  try { return await ext.permissions.contains({ origins: [origin] }); } catch { return true; }
 }
+const hasHubAccess = () => hasAccess(HUB_ORIGIN);
 
 // Pages opened before install have no content script; inject on demand.
 async function ensureContentScript(tabId) {
@@ -801,6 +917,8 @@ ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Without host access the browser blocks the request before it is sent; say so plainly.
     if (e?.code === 'network' && !(await hasHubAccess())) {
       e = new ApiError(0, 'no_host_access', 'The browser has not given BeaverBusters access to sdb.netherportal3.com. Click "Allow access" and accept the browser\'s prompt.');
+    } else if (e?.code === 'i4g_network' && !(await hasAccess(I4G_ORIGIN))) {
+      e = new ApiError(0, 'no_host_access', `The browser has not given BeaverBusters access to ${I4G_HOST}. Click "Allow access" and accept the browser's prompt.`);
     }
     sendResponse({ error: errInfo(e) });
   });

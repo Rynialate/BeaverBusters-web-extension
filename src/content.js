@@ -306,7 +306,7 @@
     host.style.display = '';
     const v = effective?.verdict || 'not_in_hub';
     const color = { scam: '#d52a2b', suspected: '#b45309', not_scam: '#007e65', not_in_hub: '#0871c3' }[v] || '#636e72';
-    const label = VERDICT_LABEL[v] || v;
+    const label = effective?.label || VERDICT_LABEL[v] || v; // I4G checks bring their own label
 
     if (collapsed) {
       const n = wallets.length ? ` · ${wallets.length} wallet${wallets.length > 1 ? 's' : ''}` : '';
@@ -317,7 +317,14 @@
 
     const lines = [];
     if (effective?.parent) lines.push(`<p class="row">Parent domain <b>${esc(effective.via)}</b> is flagged.</p>`);
-    if (check?.known || check?.parent?.known) {
+    if (check?.source === 'i4g') {
+      if (check.known) {
+        lines.push(`<p class="row">Status: ${esc(check.status)} · ${check.hasWallets ? 'wallets on record' : 'no wallets collected yet'}</p>`);
+        if (check.stale) lines.push(`<p class="row muted">Newest wallet on record is over 30 days old.</p>`);
+      } else {
+        lines.push(`<p class="row"><b>Not reported to I4G yet</b></p>`);
+      }
+    } else if (check?.known || check?.parent?.known) {
       const c = check.known ? check : check.parent;
       lines.push(`<p class="row">${c.submitted ? `Submitted by ${esc((c.submitted_by || []).join(', ') || 'a contributor')}` : '<b>Not submitted yet</b>'}${c.claimed_by ? ` · claimed by ${esc(c.claimed_by)}` : ''}</p>`);
       lines.push(`<p class="row muted">${esc(c.wallet_count ?? 0)} wallet(s) on record${c.status ? ' · ' + esc(c.status) : ''}</p>`);
