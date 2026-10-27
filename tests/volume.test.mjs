@@ -7,7 +7,7 @@
 //
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { units, iso, latest, hasActivity, addUsd, stableFlows, analyzeFlows, utxoFlows, walletInsights, etherscanResult, etherscanSummary, DEPOSIT_TXS, DEPOSIT_USD } from '../src/lib/volume.js';
+import { units, iso, latest, hasActivity, addUsd, stableFlows, analyzeFlows, utxoFlows, walletInsights, etherscanResult, etherscanSummary, EXCHANGE_TXS, EXCHANGE_USD } from '../src/lib/volume.js';
 
 const close = (actual, expected, rel = 1e-12) =>
   assert.ok(Math.abs(actual - expected) <= Math.abs(expected) * rel, `${actual} !~ ${expected}`);
@@ -351,13 +351,13 @@ describe('utxoFlows()', () => {
 // ------------------------------------------------------------------ walletInsights()
 
 describe('walletInsights()', () => {
-  it('a quiet wallet is not a deposit address, and senders are summed over networks', () => {
+  it('a quiet wallet is not a likely exchange, and senders are summed over networks', () => {
     const v = walletInsights({ networks: [base({ txCount: 40, senders: 12 }), base({ txCount: 3, senders: 2, sendersPartial: true })], usdReceived: 9000 });
     assert.equal(v.service, null);
     assert.equal(v.senders, 14);
     assert.equal(v.sendersPartial, true);
   });
-  it('an explorer name tag marks a deposit address; a scam tag does not, and is kept as risky', () => {
+  it('an explorer name tag marks a likely exchange; a scam tag does not, and is kept as risky', () => {
     const ex = walletInsights({ networks: [base({ label: 'Binance-Hot 3', source: 'tronscan.org', network: 'Tron' })] });
     assert.deepEqual(ex.service.reasons, [{ kind: 'tag', label: 'Binance-Hot 3', source: 'tronscan.org' }]);
     const bad = walletInsights({ networks: [base({ label: 'Fake_Phishing123', source: 'tronscan.org' })] });
@@ -365,8 +365,8 @@ describe('walletInsights()', () => {
     assert.equal(bad.tags[0].risky, true);
   });
   it('defaults: 1,000 transactions or $1,000,000 received or held', () => {
-    assert.equal(DEPOSIT_TXS, 1000);
-    assert.equal(DEPOSIT_USD, 1e6);
+    assert.equal(EXCHANGE_TXS, 1000);
+    assert.equal(EXCHANGE_USD, 1e6);
     assert.deepEqual(walletInsights({ networks: [base({ txCount: 1000 })] }).service.reasons, [{ kind: 'tx_count', value: 1000, partial: false }]);
     assert.equal(walletInsights({ networks: [base({ txCount: 999, usdBalance: 999999 })], usdReceived: 999999 }).service, null);
     assert.equal(walletInsights({ networks: [base({})], usdReceived: 1e6 }).service.reasons[0].kind, 'received_usd');

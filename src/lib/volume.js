@@ -1023,23 +1023,23 @@ export function addUsd(vol, prices) {
 
 // ---------- wallet insights ----------
 
-// A wallet this busy or this big is usually an exchange deposit address or another service's
-// address, not the scammer's own. Both limits are in Settings (0 turns one off). Explorer name tags
-// (Tronscan) count too, unless the tag itself says scam.
-export const DEPOSIT_TXS = 1000;
-export const DEPOSIT_USD = 1e6;
+// A wallet this busy or this big is more likely an exchange or payment service than the scammer's
+// own wallet. Both limits are in Settings (0 turns one off). Explorer name tags (Tronscan) count too,
+// unless the tag itself says scam.
+export const EXCHANGE_TXS = 1000;
+export const EXCHANGE_USD = 1e6;
 const RISK_TAG = /scam|fraud|phish|hack|exploit|stolen|drain|ponzi|sanction|theft|heist|fake/i;
 
 // Wallet-level summary of the per-network analysis; run after addUsd() (it reads the USD figures).
 // Safe to run again, e.g. when the limits change.
 //   txCount:  transactions summed over networks (null when no network had a count); txCountPartial
 //             when a count is only a lower bound
-//   service:  likely deposit address: { reasons: [{ kind: 'tag', label, source }
+//   service:  likely exchange: { reasons: [{ kind: 'tag', label, source }
 //             | { kind: 'tx_count', value, partial } | { kind: 'received_usd' | 'balance_usd', value }] } or null
 //   tags:     explorer name tags, with `risky` for the ones that say scam/phishing/...
 //   senders:  distinct senders, summed over networks (null when no network had a transfer list)
 //   poisoning: [{ fake, real, network }]
-export function walletInsights(vol, { txs = DEPOSIT_TXS, usd = DEPOSIT_USD } = {}) {
+export function walletInsights(vol, { txs = EXCHANGE_TXS, usd = EXCHANGE_USD } = {}) {
   const nets = vol.networks || [];
   const tags = nets.filter(n => n.label).map(n => ({ label: n.label, source: n.source, network: n.network, risky: RISK_TAG.test(n.label) }));
   const reasons = tags.filter(t => !t.risky).map(t => ({ kind: 'tag', label: t.label, source: t.source }));

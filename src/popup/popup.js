@@ -203,7 +203,7 @@ function insightTags(v) {
   if (!v || v.loading) return '';
   let t = '';
   if (v.txCount > 0) t += `<span class="tag t-grey" title="${esc(txBreakdown(v))}">${esc(fmtCount(v.txCount))}${v.txCountPartial ? '+' : ''} txs</span>`;
-  if (v.service) t += `<span class="tag t-info" title="${esc(serviceText(v.service))}">likely deposit address</span>`;
+  if (v.service) t += `<span class="tag t-info" title="${esc(serviceText(v.service))}">likely exchange</span>`;
   if (v.tags?.some(x => x.risky)) t += `<span class="tag t-scam">explorer: ${esc(v.tags.find(x => x.risky).label)}</span>`;
   if (v.poisoning?.length) t += `<span class="tag t-warn">address poisoning</span>`;
   return t;
@@ -261,7 +261,7 @@ function volumeHtml(v) {
   const out = [];
   const flags = [];
   for (const t of (v.tags || []).filter(x => x.risky)) flags.push(`<div class="flag f-scam">${esc(t.source)} tags this address “${esc(t.label)}”.</div>`);
-  if (v.service) flags.push(`<div class="flag f-svc"><b>Likely a deposit address:</b> ${esc(serviceText(v.service))}. Exchanges and payment services use addresses like this, so it is probably not the scammer's own wallet: check before submitting it.</div>`);
+  if (v.service) flags.push(`<div class="flag f-svc"><b>Likely an exchange or service wallet:</b> ${esc(serviceText(v.service))}. Probably not the scammer's own wallet: check before submitting it.</div>`);
   if (v.poisoning?.length) flags.push(`<div class="flag f-poison"><b>Address poisoning:</b> ${esc(poisoningText(v.poisoning))}. They send dust so the wrong address gets copied from the history.</div>`);
   if (v.usdReceived || v.usdSent) {
     const plus = v.usdPartial || v.usdMissing?.length ? '+' : '';
@@ -367,7 +367,7 @@ function renderChecklist() {
       : w.confidence === 'high' && !w.result?.onThisDomain && !w.result?.excluded && !w.volume?.service;
     const ticked = accepted && (touched ? prev.get(w.address) : auto);
     const notes = [];
-    if (w.volume?.service) notes.push('likely deposit address');
+    if (w.volume?.service) notes.push('likely exchange');
     if (!accepted) notes.push(`I4G does not take ${W.chainLabel(w.chain)} addresses`);
     const pick = i4gOn && /^0x/i.test(w.address) ? chainSelect(w.address, picks.get(w.address.toLowerCase()), i4gDefaultEvmChain(w.volume)) : '';
     return `<label class="inline"><input type="checkbox" data-addr="${esc(w.address)}" id="sw${i}" ${ticked ? 'checked' : ''}${accepted ? '' : ' disabled'}${touched ? ' data-touched="1"' : ''}><code>${esc(w.address)}</code>${pick}${notes.length ? ` <span class="muted">${esc(notes.join(' · '))}</span>` : ''}</label>`;
@@ -703,7 +703,7 @@ for (const el of document.querySelectorAll('[data-set]')) {
       state.settings = (await call({ type: 'settings:save', settings: { [key]: value } })).settings;
       syncVolumeOption();
       if (key === 'etherscanKey') return etherscanSaved(value);
-      if (key === 'depositTxs' || key === 'depositUsd') {
+      if (key === 'exchangeTxs' || key === 'exchangeUsd') {
         setMsg($('limitsMsg'), 'Saved. Wallets are flagged with the new limits.', 'ok');
         return loadVolumes(); // the background re-applies the limits to the figures it has
       }

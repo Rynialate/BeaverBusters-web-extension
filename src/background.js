@@ -4,7 +4,7 @@
 
 import { hub, limits, ApiError, CLIENT_SOURCE } from './lib/api.js';
 import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES, HUB_ORIGIN } from './lib/settings.js';
-import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, setTronscanKey, SUPPORTED as VOLUME_CHAINS, walletInsights, setEtherscanKey, checkEtherscanKey, DEPOSIT_TXS, DEPOSIT_USD } from './lib/volume.js';
+import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, setTronscanKey, SUPPORTED as VOLUME_CHAINS, walletInsights, setEtherscanKey, checkEtherscanKey, EXCHANGE_TXS, EXCHANGE_USD } from './lib/volume.js';
 import { i4g, i4gCheck, i4gVerdict, i4gChain, i4gSiteUrl, I4G_KEY_RE, I4G_MAX_WALLETS, I4G_ORIGIN, I4G_HOST } from './lib/i4g.js';
 import './lib/wallets.js';
 
@@ -304,10 +304,10 @@ function volumeStale(v) {
   return !(age < VOLUME_TTL) || v.errors?.length > 0 || (v.networks?.length > 0 && !v.pricesAt);
 }
 
-// Settings → "Flag likely deposit addresses": empty or 0 turns a limit off.
-function depositLimits(settings) {
+// Settings → "Flag as likely exchange from": empty or 0 turns a limit off.
+function exchangeLimits(settings) {
   const limit = (v, fallback) => (v === undefined || v === null ? fallback : Math.max(0, Number(v) || 0));
-  return { txs: limit(settings.depositTxs, DEPOSIT_TXS), usd: limit(settings.depositUsd, DEPOSIT_USD) };
+  return { txs: limit(settings.exchangeTxs, EXCHANGE_TXS), usd: limit(settings.exchangeUsd, EXCHANGE_USD) };
 }
 
 async function priced(vol) {
@@ -318,7 +318,7 @@ async function priced(vol) {
     addUsd(vol, {});
     vol.pricesAt = null;
   }
-  return walletInsights(vol, depositLimits((await getConfig()).settings));
+  return walletInsights(vol, exchangeLimits((await getConfig()).settings));
 }
 
 async function volumeFor(w) {
@@ -378,7 +378,7 @@ async function volumesForTab(tabId) {
     }),
   ]);
   // Cached figures may have been flagged under other limits: apply the current ones.
-  const limits = depositLimits((await getConfig()).settings);
+  const limits = exchangeLimits((await getConfig()).settings);
   for (const v of Object.values(vols)) if (v && !v.placeholder) walletInsights(v, limits);
   // Apply to the current state, unless the tab has moved on to another page meanwhile.
   const now = await updateTab(tabId, cur => (cur && cur.url === url
@@ -574,7 +574,7 @@ function volumeReport(vols, now) {
     kind: 'wallet_volume',
     result: active ? 'funded' : complete ? 'no_activity' : 'unknown',
     checked_at: vols.map(v => v.at).sort()[0] || now,
-    detail: { note: 'Lifetime on-chain totals from public explorers; UTXO "received" is gross (includes change); USD at the price when checked; usd_partial marks lower bounds. distinct_senders counts non-dust incoming transfers in the transfer history read (summed over networks); likely_service flags likely deposit addresses (explorer exchange tag, or past the transaction / USD limits set in the extension); address_poisoning lists look-alike counterparties that only moved dust.', wallets },
+    detail: { note: 'Lifetime on-chain totals from public explorers; UTXO "received" is gross (includes change); USD at the price when checked; usd_partial marks lower bounds. distinct_senders counts non-dust incoming transfers in the transfer history read (summed over networks); likely_service flags likely exchange or service wallets (explorer exchange tag, or past the transaction / USD limits set in the extension); address_poisoning lists look-alike counterparties that only moved dust.', wallets },
   };
 }
 
@@ -871,7 +871,7 @@ async function handleExtension(msg) {
       const { settings } = await getConfig();
       if (!wallet || settings.volume === 'off' || !VOLUME_CHAINS.has(wallet.chain)) return { volume: null };
       const volume = await volumeFor(wallet).catch(() => null);
-      return { volume: volume && walletInsights(volume, depositLimits(settings)) };
+      return { volume: volume && walletInsights(volume, exchangeLimits(settings)) };
     }
     case 'tab:volumes':
       return { wallets: await volumesForTab(msg.tabId) };

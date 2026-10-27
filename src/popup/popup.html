@@ -162,12 +162,12 @@
         <input id="etherscanKey" type="password" data-set="etherscanKey" autocomplete="off" spellcheck="false" placeholder="Leave empty to use Ethplorer and Blockscout">
         <p class="muted small">With a key, 0x wallets are read from Etherscan (API V2): transaction counts and money in and out on Ethereum, BNB Chain, Polygon, Arbitrum, Optimism, Base and Avalanche, where your plan covers the chain (the free plan does not cover BNB Chain, Base, Optimism or Avalanche; those use the other explorers). Kept in this browser, sent only to Etherscan.</p>
         <p id="etherscanMsg" class="msg" role="status"></p>
-        <label>Flag likely deposit addresses from</label>
+        <label>Flag as likely exchange from</label>
         <div class="row limits">
-          <input id="depositTxs" type="number" min="0" step="100" data-set="depositTxs" aria-label="Transactions"><span class="small">transactions or</span>
-          <span class="small">$</span><input id="depositUsd" type="number" min="0" step="100000" data-set="depositUsd" aria-label="US dollars received or held">
+          <input id="exchangeTxs" type="number" min="0" step="100" data-set="exchangeTxs" aria-label="Transactions"><span class="small">transactions or</span>
+          <span class="small">$</span><input id="exchangeUsd" type="number" min="0" step="100000" data-set="exchangeUsd" aria-label="US dollars received or held">
         </div>
-        <p class="muted small">Wallets this busy, or that received or hold this much, are usually exchange deposit or payment-service addresses, not the scammer's own. They get a "likely deposit address" tag and are left unticked for submission. 0 turns a limit off.</p>
+        <p class="muted small">Wallets this busy, or that received or hold this much, are usually an exchange or payment service, not the scammer's own. They get a "likely exchange" tag and are left unticked for submission. 0 turns a limit off.</p>
         <p id="limitsMsg" class="msg" role="status"></p>
         <label for="ignoreList">Ignored sites (one per line)</label>
         <textarea id="ignoreList" rows="4" spellcheck="false"></textarea>
