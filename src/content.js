@@ -278,13 +278,15 @@
     if (v?.usdReceived) flow = `<span class="tag flow" title="Lifetime received, at today's prices${lower ? ' (at least)' : ''}">≈ ${esc(fmtUsd(v.usdReceived))}${lower ? '+' : ''} in</span>`;
     else if (native) flow = `<span class="tag flow" title="Lifetime received (no USD price available)">${esc(fmtCoin(native.received))} ${esc(native.asset)}${native.partial ? '+' : ''} in</span>`;
     else if (v && !v.placeholder && !v.networks?.length && v.checked?.length && !v.errors?.length) flow = `<span class="tag neutral">no on-chain activity</span>`;
-    if (v?.service) flow += `<span class="tag info" title="Very busy wallet or tagged by an explorer as an exchange: probably not the scammer's own. Details in the toolbar popup.">likely exchange</span>`;
+    if (v?.txCount > 0) flow += `<span class="tag neutral" title="Transactions on record">${esc(fmtCount(v.txCount))}${v.txCountPartial ? '+' : ''} txs</span>`;
+    if (v?.service) flow += `<span class="tag info" title="Very busy or very large wallet, or an exchange address tagged by an explorer: usually an exchange deposit or payment-service address, not the scammer's own. Details in the toolbar popup.">likely deposit address</span>`;
     if (v?.poisoning?.length) flow += `<span class="tag suspected" title="Look-alike addresses sent dust to this wallet's counterparties. Details in the toolbar popup.">address poisoning</span>`;
     const chain = /^0x/i.test(w.address) ? 'evm' : w.chain;
     return `<li>${tags}${flow}<span class="muted">${esc(chain)}${w.confidence !== 'high' ? ' (no checksum)' : ''}</span><br><code>${esc(w.address)}</code></li>`;
   }
 
   const fmtCoin = n => (n >= 1000 ? Math.round(n).toLocaleString() : Number(n.toPrecision(3)).toString());
+  const fmtCount = n => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n.toLocaleString());
 
   function fmtUsd(n) {
     if (n >= 1e6) return '$' + (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';

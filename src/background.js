@@ -4,7 +4,7 @@
 
 import { hub, limits, ApiError, CLIENT_SOURCE } from './lib/api.js';
 import { ext, getConfig, saveSettings, DEFAULT_SETTINGS, VERDICTS, REASON_CODES, HUB_ORIGIN } from './lib/settings.js';
-import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, setTronscanKey, SUPPORTED as VOLUME_CHAINS, walletInsights } from './lib/volume.js';
+import { walletVolume, usdPrices, addUsd, hasActivity, restoreBlocks, setBlockListener, setTronscanKey, SUPPORTED as VOLUME_CHAINS, walletInsights, setEtherscanKey, checkEtherscanKey, DEPOSIT_TXS, DEPOSIT_USD } from './lib/volume.js';
 import { i4g, i4gCheck, i4gVerdict, i4gChain, i4gSiteUrl, I4G_KEY_RE, I4G_MAX_WALLETS, I4G_ORIGIN, I4G_HOST } from './lib/i4g.js';
 import './lib/wallets.js';
 
@@ -304,6 +304,12 @@ function volumeStale(v) {
   return !(age < VOLUME_TTL) || v.errors?.length > 0 || (v.networks?.length > 0 && !v.pricesAt);
 }
 
+// Settings → "Flag likely deposit addresses": empty or 0 turns a limit off.
+function depositLimits(settings) {
+  const limit = (v, fallback) => (v === undefined || v === null ? fallback : Math.max(0, Number(v) || 0));
+  return { txs: limit(settings.depositTxs, DEPOSIT_TXS), usd: limit(settings.depositUsd, DEPOSIT_USD) };
+}
+
 async function priced(vol) {
   try {
     addUsd(vol, await prices(vol.networks.map(n => n.asset)));
@@ -312,7 +318,7 @@ async function priced(vol) {
     addUsd(vol, {});
     vol.pricesAt = null;
   }
-  return walletInsights(vol);
+  return walletInsights(vol, depositLimits((await getConfig()).settings));
 }
 
 async function volumeFor(w) {
@@ -330,7 +336,9 @@ async function volumeFor(w) {
     }
   }
   return once(ck, async () => {
-    setTronscanKey((await getConfig()).settings.tronscanKey);
+    const { settings } = await getConfig();
+    setTronscanKey(settings.tronscanKey);
+    setEtherscanKey(settings.etherscanKey);
     let vol;
     // A 0x wallet where only some networks failed: re-check just those and keep the rest.
     const failed = v?.data?.errors?.length && v.data.checked?.length && /^0x/i.test(w.address) ? v.data.errors.map(e => e.network) : null;
@@ -369,6 +377,9 @@ async function volumesForTab(tabId) {
       for (let w = queue.shift(); w; w = queue.shift()) vols[w.address] = await volumeFor(w);
     }),
   ]);
+  // Cached figures may have been flagged under other limits: apply the current ones.
+  const limits = depositLimits((await getConfig()).settings);
+  for (const v of Object.values(vols)) if (v && !v.placeholder) walletInsights(v, limits);
   // Apply to the current state, unless the tab has moved on to another page meanwhile.
   const now = await updateTab(tabId, cur => (cur && cur.url === url
     ? { ...cur, wallets: (cur.wallets || []).map(w => (vols[w.address] ? { ...w, volume: vols[w.address] } : w)) }
@@ -536,16 +547,18 @@ function volumeReport(vols, now) {
     usd_received: v.usdReceived === null || v.usdReceived === undefined ? null : Math.round(v.usdReceived),
     usd_sent: v.usdSent === null || v.usdSent === undefined ? null : Math.round(v.usdSent),
     usd_partial: !!v.usdPartial,
+    tx_count: v.txCount ?? null,
+    tx_count_partial: !!v.txCountPartial,
     distinct_senders: v.senders ?? null,
     senders_partial: !!v.sendersPartial,
-    likely_service: v.service ? { reasons: v.service.reasons.map(r => (r.kind === 'tag' ? r : { kind: r.kind, value: Math.round(r.value) })) } : null,
+    likely_service: v.service ? { reasons: v.service.reasons.map(r => (r.kind === 'tag' ? r : { kind: r.kind, value: Math.round(r.value), ...(r.partial ? { partial: true } : {}) })) } : null,
     explorer_tags: (v.tags || []).map(t => ({ label: t.label, source: t.source, network: t.network, risky: t.risky })),
     address_poisoning: (v.poisoning || []).map(p => ({ fake: p.fake, imitates: p.real, network: p.network })),
     errors: v.errors.map(e => ({ network: e.network, code: e.code })),
     networks: v.networks.map(n => ({
       network: n.network, asset: n.asset,
       received: round(n.received), sent: round(n.sent), balance: round(n.balance),
-      tx_count: n.txCount, token_transfers: n.tokenTransfers, first_seen: n.firstSeen, last_activity: n.lastActivity,
+      tx_count: n.txCount, tx_count_partial: !!n.txCountPartial, token_transfers: n.tokenTransfers, first_seen: n.firstSeen, last_activity: n.lastActivity,
       usd_received: n.usdReceived === null || n.usdReceived === undefined ? null : Math.round(n.usdReceived),
       usd_sent: n.usdSent === null || n.usdSent === undefined ? null : Math.round(n.usdSent),
       tokens: n.tokens.map(t => ({ symbol: t.symbol, received: round(t.received), sent: round(t.sent), balance: round(t.balance), partial: !!t.partial })),
@@ -561,7 +574,7 @@ function volumeReport(vols, now) {
     kind: 'wallet_volume',
     result: active ? 'funded' : complete ? 'no_activity' : 'unknown',
     checked_at: vols.map(v => v.at).sort()[0] || now,
-    detail: { note: 'Lifetime on-chain totals from public explorers; UTXO "received" is gross (includes change); USD at the price when checked; usd_partial marks lower bounds. distinct_senders counts non-dust incoming transfers in the transfer history read (summed over networks); likely_service flags exchange-like wallets; address_poisoning lists look-alike counterparties that only moved dust.', wallets },
+    detail: { note: 'Lifetime on-chain totals from public explorers; UTXO "received" is gross (includes change); USD at the price when checked; usd_partial marks lower bounds. distinct_senders counts non-dust incoming transfers in the transfer history read (summed over networks); likely_service flags likely deposit addresses (explorer exchange tag, or past the transaction / USD limits set in the extension); address_poisoning lists look-alike counterparties that only moved dust.', wallets },
   };
 }
 
@@ -774,10 +787,18 @@ async function handleExtension(msg) {
       const patch = {};
       for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in msg.settings) patch[k] = msg.settings[k];
       if ('api' in patch && !['hub', 'i4g'].includes(patch.api)) delete patch.api;
-      const before = apiOf((await getConfig()).settings);
+      const old = (await getConfig()).settings;
       const settings = await saveSettings(patch);
-      if (apiOf(settings) !== before) await switchApi();
+      if (apiOf(settings) !== apiOf(old)) await switchApi();
+      // 0x wallets are read differently with or without an Etherscan key: forget their figures.
+      if ((settings.etherscanKey || '') !== (old.etherscanKey || '')) await cacheDropPrefix('vol:0x');
       return { settings };
+    }
+    case 'etherscan:verify': {
+      const key = (await getConfig()).settings.etherscanKey;
+      if (!key) throw new ApiError(0, 'no_etherscan_key', 'No Etherscan key is set.');
+      await checkEtherscanKey(key);
+      return { ok: true };
     }
     case 'i4g:setKey': {
       const key = String(msg.key || '').trim();
@@ -849,7 +870,8 @@ async function handleExtension(msg) {
       const wallet = describeWallet(String(msg.q || '').trim());
       const { settings } = await getConfig();
       if (!wallet || settings.volume === 'off' || !VOLUME_CHAINS.has(wallet.chain)) return { volume: null };
-      return { volume: await volumeFor(wallet).catch(() => null) };
+      const volume = await volumeFor(wallet).catch(() => null);
+      return { volume: volume && walletInsights(volume, depositLimits(settings)) };
     }
     case 'tab:volumes':
       return { wallets: await volumesForTab(msg.tabId) };

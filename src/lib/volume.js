@@ -9,7 +9,8 @@
 //   doge  blockcypher              -> blockchair
 //   dash  blockcypher              -> blockchair
 //   bch   blockchain.com           -> blockchair
-//   0x…   ethplorer (Ethereum), binplorer (BNB Chain): native + USDT/USDC/DAI in/out;
+//   0x…   with an Etherscan key (Settings): Etherscan API V2 on every EVM network its plan covers,
+//         else / then: ethplorer (Ethereum), binplorer (BNB Chain): native + USDT/USDC/DAI in/out;
 //         blockscout (Polygon, Arbitrum, Base; explorer.optimism.io for Optimism): balances only
 //   trx   tronscan (+ USDT-TRC20 in/out) -> trongrid (+ USDT-TRC20 in/out)
 //   xrp   xrpscan                  -> xrplcluster (rippled)
@@ -30,6 +31,7 @@ const STABLES = {
   Arbitrum: { '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': 'USDT', '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 'USDC', '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8': 'USDC.e' },
   Optimism: { '0x94b008aa00579c1307b0ef2c499ad98a8ce58e58': 'USDT', '0x0b2c639c533813f4aa9d7837caf62653d097ff85': 'USDC' },
   Base: { '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 'USDC' },
+  Avalanche: { '0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7': 'USDT', '0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e': 'USDC' },
 };
 const stableSymbol = (network, contract) => STABLES[network]?.[String(contract || '').toLowerCase()] || null;
 
@@ -37,6 +39,7 @@ const stableSymbol = (network, contract) => STABLES[network]?.[String(contract |
 const PRICE_IDS = {
   BTC: 'bitcoin', LTC: 'litecoin', DOGE: 'dogecoin', DASH: 'dash', BCH: 'bitcoin-cash', ETH: 'ethereum',
   BNB: 'binancecoin', POL: 'polygon-ecosystem-token', TRX: 'tron', XRP: 'ripple', SOL: 'solana', ADA: 'cardano', TON: 'the-open-network',
+  AVAX: 'avalanche-2',
 };
 
 const GROSS_NOTE = 'Received and sent are gross: they include change sent back to the same address.';
@@ -50,6 +53,7 @@ const HOST_GAP_MS = {
   'toncenter.com': 1100, 'api.coingecko.com': 2500,
   // blockchain.com asks for at most one Data API request every 10 seconds (see the batching below).
   'blockchain.info': 10000, 'api.blockchain.info': 1000, 'apilist.tronscanapi.com': 400,
+  'api.etherscan.io': 350, // the free plan allows 3 calls a second
 };
 // Statuses some explorers use for "slow down" besides 429.
 const LIMIT_STATUS = { 'api.blockchair.com': [402, 430, 434, 435], 'api.trongrid.io': [403] };
@@ -162,7 +166,7 @@ const decimalsOf = d => { const n = Number(d); return d !== null && d !== undefi
 
 function result(fields) {
   return {
-    network: null, asset: null, received: null, sent: null, balance: null, txCount: null, tokenTransfers: null,
+    network: null, asset: null, received: null, sent: null, balance: null, txCount: null, txCountPartial: false, tokenTransfers: null,
     firstSeen: null, lastActivity: null, tokens: [], source: null, explorer: null, partial: false, note: null,
     senders: null, sendersPartial: false, poisoning: [], label: null,
     ...fields,
@@ -446,7 +450,9 @@ async function ethplorer(host, network, asset, explorerBase, address) {
   return result({
     network, asset,
     received: num(e.totalIn), sent: num(e.totalOut), balance: num(e.balance),
-    txCount: num(j.countTxs),
+    // countTxs is often missing; the transaction list (up to 100) then gives the count.
+    txCount: num(j.countTxs) ?? (nativeOk ? nativeTx.length : null),
+    txCountPartial: num(j.countTxs) === null && nativeOk && nativeTx.length >= ETHPLORER_HISTORY,
     lastActivity: latest(Array.isArray(nativeTx) && nativeTx[0] ? iso(nativeTx[0].timestamp) : null, iso(tokenOps?.operations?.[0]?.timestamp), iso(stableTs)),
     senders: nativeOk || flows.length ? fl.senders : null,
     sendersPartial: !nativeOk || nativeTx.length >= ETHPLORER_HISTORY || capped || failed > 0,
@@ -481,14 +487,168 @@ async function blockscout(host, network, asset, explorerBase, address) {
   });
 }
 
+// ---- Etherscan (API V2: one key for every EVM chain) ----
+// Used first for 0x wallets when Settings has an Etherscan key. The free plan does not cover BNB Chain,
+// Base, OP or Avalanche and returns at most 1,000 records per request; a chain the key's plan does
+// not cover, or any other Etherscan failure, falls back to that network's keyless explorer.
+let etherscanKey = '';
+export function setEtherscanKey(key) {
+  const next = String(key || '').trim();
+  if (next !== etherscanKey) etherscanRefused.clear(); // another key may have another plan
+  etherscanKey = next;
+}
+const ETHERSCAN_API = 'https://api.etherscan.io/v2/api';
+const ETHERSCAN_PAGE = 1000;
+const etherscanRefused = new Set(); // chain ids the key's plan does not cover, remembered for the session
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Etherscan answers errors with HTTP 200: status "0" and the reason in `result`. An empty list is
+// status "0" with an empty array ("No transactions found").
+export function etherscanResult(j) {
+  if (j && j.status === '1') return j.result;
+  if (j && Array.isArray(j.result) && !j.result.length) return [];
+  const why = String(typeof j?.result === 'string' && j.result ? j.result : j?.message || 'no answer');
+  if (/rate limit|limit reached/i.test(why)) {
+    const daily = /day|daily|resets/i.test(why);
+    throw new VolumeError('rate_limited', daily ? 'Etherscan daily limit reached' : 'Etherscan rate limit reached', Date.now() + (daily ? 3600e3 : 1500));
+  }
+  if (/api key/i.test(why)) throw new VolumeError('etherscan_key', 'Etherscan did not accept the API key set in Settings');
+  if (/not supported for this chain|upgrade your api plan/i.test(why)) throw new VolumeError('etherscan_plan', 'This chain is not covered by your Etherscan plan');
+  throw new VolumeError('etherscan_error', 'Etherscan: ' + why.slice(0, 120));
+}
+
+// The key goes in the query string, as Etherscan requires; error messages never include the URL.
+async function etherscanCall(chainid, params, key = etherscanKey) {
+  const qs = new URLSearchParams({ chainid: String(chainid), ...params, apikey: key });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return etherscanResult(await getJson(`${ETHERSCAN_API}?${qs}`, { timeoutMs: 20000 }));
+    } catch (e) {
+      // A per-second limit clears almost at once: wait and try again (twice at most).
+      if (e.code === 'rate_limited' && e.retryAt - Date.now() < 5000 && attempt < 2) { await sleep(1100); continue; }
+      throw e;
+    }
+  }
+}
+
+// Whether Etherscan accepts a key: a balance read on Ethereum.
+export async function checkEtherscanKey(key) {
+  await etherscanCall(1, { module: 'account', action: 'balance', address: '0x0000000000000000000000000000000000000000', tag: 'latest' }, String(key || '').trim());
+  return true;
+}
+
+// Etherscan's three lists for one address -> the figures of one network. `normal`, `internal` and
+// `tokens` are arrays (newest first, up to ETHERSCAN_PAGE) or null when that list failed.
+export function etherscanSummary(address, network, asset, { normal, internal, tokens }) {
+  const me = String(address).toLowerCase();
+  const capped = l => Array.isArray(l) && l.length >= ETHERSCAN_PAGE;
+  let received = 0, sent = 0, firstTs = null, lastTs = null;
+  const flows = [], stable = new Map();
+  const when = ts => {
+    const t = num(ts);
+    if (!t) return;
+    if (!lastTs || t > lastTs) lastTs = t;
+    if (!firstTs || t < firstTs) firstTs = t;
+  };
+  for (const t of [...(normal || []), ...(internal || [])]) {
+    when(t?.timeStamp);
+    if (t?.isError === '1') continue;
+    const v = units(t?.value, 18);
+    if (v === null) continue;
+    const from = String(t.from).toLowerCase(), to = String(t.to).toLowerCase();
+    if (to === me && from !== me) received += v;
+    if (from === me && to !== me) sent += v;
+    flows.push({ from, to, amount: v, tiny: isTiny(v, asset) });
+  }
+  for (const t of tokens || []) {
+    when(t?.timeStamp);
+    const contract = String(t?.contractAddress || '').toLowerCase();
+    const symbol = stableSymbol(network, contract);
+    const dec = decimalsOf(t?.tokenDecimal);
+    const v = symbol && dec !== null ? units(t.value, dec) : null;
+    if (v === null) continue;
+    const from = String(t.from).toLowerCase(), to = String(t.to).toLowerCase();
+    const s = stable.get(contract) || { symbol, decimals: dec, inn: 0, out: 0 };
+    if (to === me && from !== me) s.inn += v;
+    if (from === me && to !== me) s.out += v;
+    stable.set(contract, s);
+    flows.push({ from, to, amount: v, tiny: isTiny(v, symbol) });
+  }
+  const tokensCapped = capped(tokens);
+  const complete = Array.isArray(normal) && Array.isArray(internal) && Array.isArray(tokens) && !capped(normal) && !capped(internal) && !tokensCapped;
+  const fl = analyzeFlows(address, flows, evmNorm);
+  return {
+    received, sent,
+    txCount: Array.isArray(normal) ? normal.length : null,
+    txCountPartial: capped(normal),
+    tokenTransfers: Array.isArray(tokens) ? tokens.length : null,
+    tokenTransfersPartial: tokensCapped,
+    partial: capped(normal) || capped(internal) || !Array.isArray(internal),
+    firstSeen: complete ? iso(firstTs) : null,
+    lastActivity: iso(lastTs),
+    // In minus out is the balance when the whole token history was read; otherwise ask for it.
+    tokens: [...stable].map(([contract, t]) => ({ contract, symbol: t.symbol, decimals: t.decimals, received: t.inn, sent: t.out, balance: tokensCapped ? null : Math.max(0, t.inn - t.out), partial: tokensCapped })),
+    senders: fl.senders,
+    sendersPartial: !complete,
+    poisoning: fl.poisoning,
+  };
+}
+
+async function etherscanNetwork(net, address) {
+  const { chainid, network, asset } = net;
+  if (etherscanRefused.has(chainid)) throw new VolumeError('etherscan_plan', 'This chain is not covered by your Etherscan plan');
+  const list = action => etherscanCall(chainid, { module: 'account', action, address, startblock: '0', endblock: '99999999', page: '1', offset: String(ETHERSCAN_PAGE), sort: 'desc' });
+  let normal;
+  try { normal = await list('txlist'); } catch (e) {
+    if (e.code === 'etherscan_plan') etherscanRefused.add(chainid);
+    throw e;
+  }
+  const [internal, tokens] = await Promise.all([list('txlistinternal').catch(() => null), list('tokentx').catch(() => null)]);
+  const sum = etherscanSummary(address, network, asset, { normal, internal, tokens });
+  const active = normal.length || internal?.length || tokens?.length;
+  const balance = active ? units(await etherscanCall(chainid, { module: 'account', action: 'balance', address, tag: 'latest' }).catch(() => null), 18) : 0;
+  for (const t of sum.tokens) {
+    if (t.balance === null) t.balance = units(await etherscanCall(chainid, { module: 'account', action: 'tokenbalance', contractaddress: t.contract, address, tag: 'latest' }).catch(() => null), t.decimals);
+    delete t.contract;
+    delete t.decimals;
+  }
+  const notes = [];
+  if (internal === null) notes.push('Internal transfers could not be loaded; native totals may be low.');
+  if (tokens === null) notes.push('Token transfers could not be loaded.');
+  if (sum.txCountPartial || sum.tokenTransfersPartial || internal?.length >= ETHERSCAN_PAGE) notes.push(`Only the latest ${ETHERSCAN_PAGE.toLocaleString('en-US')} records of each kind are read; totals are a lower bound.`);
+  return result({
+    network, asset, ...sum, balance,
+    note: notes.join(' ') || null,
+    source: 'etherscan.io', explorer: `${net.explorer}${address}`,
+  });
+}
+
+// Etherscan first when there is a key; on failure the keyless explorer answers (a refused key is
+// noted). Avalanche has no keyless source.
+async function evmNetwork(net, address) {
+  if (!etherscanKey) return net.keyless(address);
+  try {
+    return await etherscanNetwork(net, address);
+  } catch (first) {
+    if (!net.keyless) throw first;
+    let r;
+    try { r = await net.keyless(address); } catch (second) { throw first.code === 'etherscan_key' ? first : second; }
+    if (first.code === 'etherscan_key') r.note = `${r.note || ''} Etherscan refused the API key set in Settings.`.trim();
+    return r;
+  }
+}
+
 const EVM_NETWORKS = [
-  { network: 'Ethereum', run: a => ethplorer('api.ethplorer.io', 'Ethereum', 'ETH', 'https://etherscan.io/address/', a) },
-  { network: 'BNB Chain', run: a => ethplorer('api.binplorer.com', 'BNB Chain', 'BNB', 'https://bscscan.com/address/', a) },
-  { network: 'Polygon', run: a => blockscout('polygon.blockscout.com', 'Polygon', 'POL', 'https://polygonscan.com/address/', a) },
-  { network: 'Arbitrum', run: a => blockscout('arbitrum.blockscout.com', 'Arbitrum', 'ETH', 'https://arbiscan.io/address/', a) },
-  { network: 'Optimism', run: a => blockscout('explorer.optimism.io', 'Optimism', 'ETH', 'https://optimistic.etherscan.io/address/', a) },
-  { network: 'Base', run: a => blockscout('base.blockscout.com', 'Base', 'ETH', 'https://basescan.org/address/', a) },
+  { network: 'Ethereum', asset: 'ETH', chainid: 1, explorer: 'https://etherscan.io/address/', keyless: a => ethplorer('api.ethplorer.io', 'Ethereum', 'ETH', 'https://etherscan.io/address/', a) },
+  { network: 'BNB Chain', asset: 'BNB', chainid: 56, explorer: 'https://bscscan.com/address/', keyless: a => ethplorer('api.binplorer.com', 'BNB Chain', 'BNB', 'https://bscscan.com/address/', a) },
+  { network: 'Polygon', asset: 'POL', chainid: 137, explorer: 'https://polygonscan.com/address/', keyless: a => blockscout('polygon.blockscout.com', 'Polygon', 'POL', 'https://polygonscan.com/address/', a) },
+  { network: 'Arbitrum', asset: 'ETH', chainid: 42161, explorer: 'https://arbiscan.io/address/', keyless: a => blockscout('arbitrum.blockscout.com', 'Arbitrum', 'ETH', 'https://arbiscan.io/address/', a) },
+  { network: 'Optimism', asset: 'ETH', chainid: 10, explorer: 'https://optimistic.etherscan.io/address/', keyless: a => blockscout('explorer.optimism.io', 'Optimism', 'ETH', 'https://optimistic.etherscan.io/address/', a) },
+  { network: 'Base', asset: 'ETH', chainid: 8453, explorer: 'https://basescan.org/address/', keyless: a => blockscout('base.blockscout.com', 'Base', 'ETH', 'https://basescan.org/address/', a) },
+  { network: 'Avalanche', asset: 'AVAX', chainid: 43114, explorer: 'https://snowscan.xyz/address/', keyless: null },
 ];
+// Networks a 0x address is checked on: Avalanche only with an Etherscan key.
+const evmNetworks = () => EVM_NETWORKS.filter(n => n.keyless || etherscanKey);
 
 // Sum one token's TRC20 transfers in one direction, following TronGrid's pagination. Never throws:
 // a failed page ends the sum early and marks it partial.
@@ -716,6 +876,7 @@ async function solana(address) {
     network: 'Solana', asset: 'SOL',
     balance: units(bal?.value ?? 0, 9),
     txCount: merged.size,
+    txCountPartial: partial,
     partial,
     lastActivity: times.length ? iso(times[times.length - 1]) : null,
     firstSeen: times.length && !partial ? iso(times[0]) : null,
@@ -737,6 +898,7 @@ async function cardano(address) {
     network: 'Cardano', asset: 'ADA',
     balance: units(a?.balance ?? 0, 6),
     txCount: list ? list.length : null,
+    txCountPartial: !!list && list.length >= 1000,
     partial: !!list && list.length >= 1000,
     firstSeen: times.length && list.length < 1000 ? iso(times[0]) : null,
     lastActivity: times.length ? iso(times[times.length - 1]) : null,
@@ -782,7 +944,9 @@ const ADAPTERS = {
   ada: cardano,
   ton,
 };
-const EVM_CHAINS = ['eth', 'bsc', 'matic', 'arb', 'op', 'base']; // no keyless Avalanche source yet
+// 0x addresses are checked on every EVM network above whatever their chain id; 'avax' is left out
+// because it also names Avalanche X-Chain addresses, which have no explorer here.
+const EVM_CHAINS = ['eth', 'bsc', 'matic', 'arb', 'op', 'base'];
 export const SUPPORTED = new Set([...Object.keys(ADAPTERS), ...EVM_CHAINS]);
 
 const errorOf = (network, e) => ({ network, code: e?.code || 'error', message: e?.message || String(e), retryAt: e?.retryAt });
@@ -793,8 +957,9 @@ const errorOf = (network, e) => ({ network, code: e?.code || 'error', message: e
 export async function walletVolume(chain, address, { only } = {}) {
   const at = new Date().toISOString();
   if (/^0x[0-9a-fA-F]{40}$/.test(address)) {
-    const nets = only ? EVM_NETWORKS.filter(n => only.includes(n.network)) : EVM_NETWORKS;
-    const settled = await Promise.allSettled(nets.map(n => n.run(address)));
+    const all = evmNetworks();
+    const nets = only ? all.filter(n => only.includes(n.network)) : all;
+    const settled = await Promise.allSettled(nets.map(n => evmNetwork(n, address)));
     const networks = [], errors = [];
     settled.forEach((s, i) => {
       if (s.status === 'fulfilled') { if (hasActivity(s.value)) networks.push(s.value); }
@@ -858,27 +1023,34 @@ export function addUsd(vol, prices) {
 
 // ---------- wallet insights ----------
 
-// A wallet past any of these is more likely an exchange or payment service than a scammer's own
-// wallet. Explorer name tags (Tronscan) count too, unless the tag itself says scam.
-export const SERVICE_TX_COUNT = 100000;
-export const SERVICE_BALANCE_USD = 5e6;
-export const SERVICE_RECEIVED_USD = 5e7;
+// A wallet this busy or this big is usually an exchange deposit address or another service's
+// address, not the scammer's own. Both limits are in Settings (0 turns one off). Explorer name tags
+// (Tronscan) count too, unless the tag itself says scam.
+export const DEPOSIT_TXS = 1000;
+export const DEPOSIT_USD = 1e6;
 const RISK_TAG = /scam|fraud|phish|hack|exploit|stolen|drain|ponzi|sanction|theft|heist|fake/i;
 
 // Wallet-level summary of the per-network analysis; run after addUsd() (it reads the USD figures).
-//   service:  { reasons: [{ kind: 'tag', label, source } | { kind: 'tx_count' | 'balance_usd' | 'received_usd', value }] } or null
+// Safe to run again, e.g. when the limits change.
+//   txCount:  transactions summed over networks (null when no network had a count); txCountPartial
+//             when a count is only a lower bound
+//   service:  likely deposit address: { reasons: [{ kind: 'tag', label, source }
+//             | { kind: 'tx_count', value, partial } | { kind: 'received_usd' | 'balance_usd', value }] } or null
 //   tags:     explorer name tags, with `risky` for the ones that say scam/phishing/...
 //   senders:  distinct senders, summed over networks (null when no network had a transfer list)
 //   poisoning: [{ fake, real, network }]
-export function walletInsights(vol) {
+export function walletInsights(vol, { txs = DEPOSIT_TXS, usd = DEPOSIT_USD } = {}) {
   const nets = vol.networks || [];
   const tags = nets.filter(n => n.label).map(n => ({ label: n.label, source: n.source, network: n.network, risky: RISK_TAG.test(n.label) }));
   const reasons = tags.filter(t => !t.risky).map(t => ({ kind: 'tag', label: t.label, source: t.source }));
-  const maxTx = Math.max(0, ...nets.map(n => n.txCount || 0));
-  if (maxTx >= SERVICE_TX_COUNT) reasons.push({ kind: 'tx_count', value: maxTx });
-  const balance = nets.reduce((s, n) => s + (n.usdBalance || 0), 0);
-  if (balance >= SERVICE_BALANCE_USD) reasons.push({ kind: 'balance_usd', value: balance });
-  if ((vol.usdReceived || 0) >= SERVICE_RECEIVED_USD) reasons.push({ kind: 'received_usd', value: vol.usdReceived });
+  const withCount = nets.filter(n => Number.isFinite(n.txCount));
+  vol.txCount = withCount.length ? withCount.reduce((s, n) => s + n.txCount, 0) : null;
+  vol.txCountPartial = withCount.some(n => n.txCountPartial);
+  // A lower-bound count past the limit counts; one below it proves nothing either way.
+  if (txs > 0 && vol.txCount >= txs) reasons.push({ kind: 'tx_count', value: vol.txCount, partial: vol.txCountPartial });
+  const held = nets.reduce((s, n) => s + (n.usdBalance || 0), 0);
+  if (usd > 0 && (vol.usdReceived || 0) >= usd) reasons.push({ kind: 'received_usd', value: vol.usdReceived });
+  else if (usd > 0 && held >= usd) reasons.push({ kind: 'balance_usd', value: held });
   vol.service = reasons.length ? { reasons } : null;
   vol.tags = tags;
   const counted = nets.filter(n => Number.isFinite(n.senders));

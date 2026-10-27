@@ -15,6 +15,9 @@ export const DEFAULT_SETTINGS = {
   autoScope: false,         // send page HTML to the hub's scope classifier when an unknown site shows wallets
   volume: 'popup',          // on-chain volume from public explorers: 'popup' (when the popup opens) | 'auto' | 'off'
   tronscanKey: '',          // optional Tronscan API key (TRON-PRO-API-KEY); kept in this browser, sent only to Tronscan
+  etherscanKey: '',         // optional Etherscan API key (API V2, every EVM chain); kept in this browser, sent only to Etherscan
+  depositTxs: 1000,         // flag a wallet as a likely deposit address from this many transactions (0 = off)
+  depositUsd: 1000000,      // ... or from this much USD received or held (0 = off)
   api: 'hub',               // where site checks, submissions and submission history go: 'hub' | 'i4g' (I4G ScamBusters)
   ignore: [
     'sdb.netherportal3.com',

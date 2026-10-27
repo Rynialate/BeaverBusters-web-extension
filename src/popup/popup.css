@@ -81,3 +81,5 @@ body.api-i4g .hub-only { display: none; }
 .hist li { padding: 5px 0; border-top: 1px solid var(--line); list-style: none; }
 .hist { margin: 6px 0 0; padding: 0; }
 .pts-pos { color: var(--ok-text); font-weight: 600; } .pts-neg { color: var(--err-text); font-weight: 600; }
+.limits { align-items: center; flex-wrap: wrap; }
+.limits input { width: 96px; }
